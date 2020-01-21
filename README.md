@@ -4,7 +4,7 @@ A multiplayer interstellar action for the whole family!
 
 Work-in-progress for now...
 
-![game screenshot](https://raw.githubusercontent.com/maxadamski/galactica/master/res/teaser.png)
+![game screenshot](https://raw.githubusercontent.com/maxadamski/galactica/master/teaser.png)
 
 ## How to play
 

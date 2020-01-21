@@ -1,23 +1,44 @@
 
+var win = nw.Window.get();
+//win.showDevTools();
+
+var dgram = require('dgram')
+var client = dgram.createSocket('udp4');
+
+let host = '127.0.0.1'
+let port = 8080
+
+client.on('message', (buffer, remote) => {
+	if (remote.address == host && remote.port == port) {
+		onMessage(buffer.toString('utf8'));
+	}
+});
+
+function send(message) {
+	client.send(message, 0, message.length, port, host, (err, bytes) => {
+	});
+}
+
 let dt = 0;
 
 let angleSpeed = 0.005
 let moveSpeed = 0.2
 let bulletSpeed = 0.3
 
+let messages = []
+
 let pellets = [];
 let bullets = [];
-let rocks = [];
+let rocks = {};
+let stars = []
+let ships = []
+let myShip = {}
 
-let mapSize = 2000
+let mapSize = 3000
 let mapPad = 100
 let mapZoom = 2
 
 let starCount = 1000
-let stars = []
-let messages = []
-let ships = []
-let myShip = {}
 
 let maxEnergy = 5
 
@@ -25,10 +46,6 @@ let lastGarbageTime = 0
 
 let pelletAngle = 0;
 let pelletAngleSpeed = 0.002;
-
-let shieldOn = true;
-let shieldOnTime = 0;
-let shieldDecay = 1000*3;
 
 let shakeScreenOn = false;
 let shakeScreenTime = 0;
@@ -39,16 +56,27 @@ let gameTime = 1000*60*5;
 let gameOver = false;
 let gameOverReason = '';
 
+
+function distsq(a, b) {
+	let dx = a.x - b.x
+	let dy = a.y - b.y
+	return dx*dx + dy*dy
+}
+
+function outsideView(obj) {
+	return distsq(myShip, obj) > 400*400
+}
+
 function clip(x, lower, upper) {
-    return max(min(x, upper), lower);
+    return Math.max(Math.min(x, upper), lower);
 }
 
 function polygon(x, y, radius, npoints) {
     let angle = TAU / npoints;
     beginShape();
     for (let a = 0; a < TAU; a += angle) {
-        let sx = x + cos(a) * radius;
-        let sy = y + sin(a) * radius;
+        let sx = x + Math.cos(a) * radius;
+        let sy = y + Math.sin(a) * radius;
         vertex(sx, sy);
     }
     endShape(CLOSE);
@@ -94,8 +122,27 @@ function randomStar() {
     }
 }
 
+let cx = 0
+let cy = 0
+let minT = 0
+let maxTx = 0
+let maxTy = 0
+
+function updateViewport() {
+    scale(mapZoom);
+	let tx = -clip(myShip.x-cx, minT, maxTx)
+	let ty = -clip(myShip.y-cy, minT, maxTy)
+    translate(tx, ty);
+}
+
 function windowResized() {
     resizeCanvas(windowWidth, windowHeight);
+
+    cx = windowWidth/2/mapZoom
+    cy = windowHeight/2/mapZoom
+	minT = -mapPad
+	maxTx = mapSize + mapPad - 2*cx
+	maxTy = mapSize + mapPad - 2*cy
 
     let p = max(windowWidth, windowHeight);
     let q = windowWidth > windowHeight ? 1920 : 1080;
@@ -105,18 +152,78 @@ function windowResized() {
 function setup() {
     let canvas = createCanvas(windowWidth, windowHeight);
     canvas.parent('game');
-    frameRate(60);
-    windowResized();
+    frameRate(50);
     gameStartTime = millis();
-    joinGame();
-
-    messages.push({text: 'max entered the arena [system]'});
+	send('rock');
+	send('join');
 
     for (let i = 0; i < starCount; i++)
         stars.push(randomStar());
 
+	/*
     for (let i = 0; i < 100; i++)
         rocks.push(randomRock());
+	*/
+
+    windowResized();
+}
+
+function onMessage(text) {
+	let msgs = text.split(';').map(x => x.split(','));
+
+	// bul,id,x,y,dx,dy
+
+	for (let msg of msgs) {
+		if (msg[0] == 'join-ok') {
+			myShip = {
+				id: Number(msg[1]),
+				x: dint(msg[2]),
+				y: dint(msg[3]),
+				angle: dint(msg[4]),
+				spice: Number(msg[5]),
+				energy: Number(msg[6]),
+				shieldOn: Number(msg[7]),
+			};
+			messages.push({text: `${myShip.id} entered the arena [system]`});
+			joinGame();
+
+		} else if (msg[0] == 'rock-ok') {
+			let angle = dint(msg[4])
+			let size = Number(msg[6])
+			let id = Number(msg[1])
+			if (id in rocks) {
+				rocks[id].x = dint(msg[2]);
+				rocks[id].y = dint(msg[3]);
+			} else {
+				rock = {
+					id: id,
+					x: dint(msg[2]),
+					y: dint(msg[3]),
+					dx: Math.cos(angle),
+					dy: Math.sin(angle),
+					speed: dint(msg[5]),
+					size: size,
+					health: Number(msg[7]),
+					maxHealth: size / 2,
+					active: true,
+					angleSpeed: randomGaussian(0, 0.0001),
+					vertices: generateRock(size),
+				};
+				rocks[rock.id] = rock;
+			}
+		} else if (msg[0] == 'newplayer') {
+			id = msg[1];
+			messages.push({text: `${id} entered the arena [system]`});
+		} else if (msg[0] == 'bul') {
+			bullets.push({
+				id: msg[1],
+				x: dint(msg[2]), y: dint(msg[3]),
+				dx: dint(msg[4]), dy: dint(msg[5]),
+			})
+		} else {
+			messages.push({text: `unknown message ${text}`});
+		}
+	}
 }
 
 function drawUI() {
@@ -163,7 +270,8 @@ function drawUI() {
     textSize(16);
     let i = 0;
     for (let log of messages) {
-        text(log.text, windowWidth - 20, 57 + i*18);
+        text(`${log.text}`, windowWidth - 20, 57 + i*18);
+		i += 1;
     }
 
     pop();
@@ -173,6 +281,7 @@ function drawStars() {
     push()
     strokeWeight(1);
     for (let star of stars) {
+		if (outsideView(star)) continue;
         stroke(star.light/100*255)
         rect(star.x, star.y, 1, 1);
     }
@@ -194,11 +303,6 @@ function enableShield(ship, decay) {
 
 function joinGame() {
     gameOver = false;
-    myShip.x = random(0, mapSize);
-    myShip.y = random(0, mapSize);
-    myShip.angle = -HALF_PI;
-    myShip.energy = maxEnergy;
-    myShip.spice = 0;
     enableShield(myShip, 4*1000);
 }
 
@@ -268,6 +372,7 @@ function drawShip(ship) {
 }
 
 function drawRock(rock) {
+	if (outsideView(rock)) return;
     push();
     stroke(0, 100 - 100 * rock.health/rock.maxHealth, 100);
     translate(rock.x, rock.y);
@@ -280,20 +385,21 @@ function drawRock(rock) {
 }
 
 function drawPellet(pellet) {
+	if (outsideView(pellet)) return;
     push();
     translate(pellet.x, pellet.y);
     rotate(pelletAngle);
-    H = 20;
     if (pellet.fuel) {
+		stroke(60, 100, 100);
         rect(-2, -2, 4, 4);
     } else {
-        triangle(-1, -1, 1, -1, 0, 0.73);
+        rect(-2, -2, 4, 4);
     }
     pop();
 }
 
 function collidePellet(pellet) {
-    if (dist(myShip.x, myShip.y, pellet.x, pellet.y) < 8) {
+    if (distsq(myShip, pellet) < 64) {
         pellet.active = false;
         if (pellet.fuel) {
             myShip.energy += 5;
@@ -304,7 +410,7 @@ function collidePellet(pellet) {
 }
 
 function generateSpice(rock) {
-    count = randomGaussian(rock.size/5, 2); 
+    count = randomGaussian(5, 1); 
     for (let i = 0; i < count; i++) {
         px = randomGaussian(rock.x, rock.size/4);
         if (px < 0 || px > mapSize) continue;
@@ -323,7 +429,8 @@ function collideBullet(bullet) {
 
     //if (!shieldOn && bullet.player != playerId && dist(x, y, bullet.x, bullet.y) < 0) shipGotShot();
 
-    for (let rock of rocks) {
+    for (let id in rocks) {
+		let rock = rocks[id]
         if (!rock.active) continue;
         if (dist(bullet.x, bullet.y, rock.x, rock.y) < rock.size/2) {
             bullet.active = false;
@@ -348,39 +455,55 @@ function collideRock(rock) {
 }
 
 function collectGarbage() {
-    let sec = second()
-    if (sec == lastGarbageTime || sec % 2 != 0) return;
-    lastGarbageTime = sec
-
+    if (millis() - lastGarbageTime < 1000) return;
+    lastGarbageTime = millis();
+	console.log('garbage');
     bullets = bullets.filter(x => x.active);
-    rocks = rocks.filter(x => x.active);
+    //rocks = rocks.filter(x => x.active);
     pellets = pellets.filter(x => x.active);
+
+	send('rock');
+}
+
+function eint(x) { return floor(x * 1000) }
+function dint(x) { return Number(x) / 1000 }
+
+function sendMovement(o) {
+	send(`pos,${o.id},${eint(o.x)},${eint(o.y)},${eint(o.angle)}`);
+}
+
+function sendBullet(o) {
+	send(`bul,${o.id},${eint(o.x)},${eint(o.y)},${eint(o.dx)},${eint(o.dy)}`);
 }
 
 function processMovement() {
     let ship = myShip
     if (keyIsDown(LEFT_ARROW)) {
         ship.angle -= dt * angleSpeed;
+		ship.angle %= TAU
     }
     if (keyIsDown(RIGHT_ARROW)) {
         ship.angle += dt * angleSpeed;
+		ship.angle %= TAU
     }
     if (keyIsDown(UP_ARROW)) {
-        ship.x += dt * moveSpeed * cos(ship.angle);
-        ship.y += dt * moveSpeed * sin(ship.angle);
+        ship.x += dt * moveSpeed * Math.cos(ship.angle);
+        ship.y += dt * moveSpeed * Math.sin(ship.angle);
     }
     if (keyIsDown(DOWN_ARROW)) {
-        ship.x -= dt * moveSpeed * cos(ship.angle);
-        ship.y -= dt * moveSpeed * sin(ship.angle);
+        ship.x -= dt * moveSpeed * Math.cos(ship.angle);
+        ship.y -= dt * moveSpeed * Math.sin(ship.angle);
     }
     ship.x = clip(ship.x, 0, mapSize);
     ship.y = clip(ship.y, 0, mapSize);
+	sendMovement(myShip);
 }
 
 function drawRocks() {
-    for (let rock of rocks) {
+    for (let id in rocks) {
+		let rock = rocks[id]
         if (!rock.active) continue;
-        rock.angle += dt * rock.angleSpeed;
+        //rock.angle += dt * rock.angleSpeed;
         rock.x += dt * rock.speed * rock.dx;
         rock.y += dt * rock.speed * rock.dy;
         drawRock(rock);
@@ -435,13 +558,7 @@ function draw() {
         processMovement();
     }
 
-    scale(mapZoom);
-    let cx = windowWidth/2/mapZoom
-    let cy = windowHeight/2/mapZoom
-    translate(
-        -clip(myShip.x-cx, -mapPad, mapSize+mapPad-2*cx),
-        -clip(myShip.y-cy, -mapPad, mapSize+mapPad-2*cy));
-
+	updateViewport();
     updateScreenShake();
 
     rect(0, 0, mapSize, mapSize);
@@ -464,10 +581,23 @@ function draw() {
 
 function keyPressed() {
     if (keyCode == 32) { // space
-        bullets.push({x: myShip.x, y: myShip.y, dx: cos(myShip.angle), dy: sin(myShip.angle), time: 0, active: true});
+		bullet = {
+			id: myShip.id,
+			x: myShip.x, y: myShip.y,
+			dx: Math.cos(myShip.angle),
+			dy: Math.sin(myShip.angle),
+			time: 0, active: true
+		};
+        if (!gameOver) {
+			bullets.push(bullet);
+			sendBullet(bullet);
+		}
     }
     if (keyCode == 13) { // enter
         joinGame();
     }
+	if (keyCode == 82) { // enter
+		win.reload();
+	}
 }
 
