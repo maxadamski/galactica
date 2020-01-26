@@ -1,1 +1,5 @@
 client/nwjs/
+client/.eslintrc.json
+*.tar.gz
+yarn.lock
+node_modules/

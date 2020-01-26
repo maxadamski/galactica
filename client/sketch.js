@@ -1,603 +1,802 @@
+/* eslint no-undef: 0 */
 
-var win = nw.Window.get();
-//win.showDevTools();
+let dt = 0
 
-var dgram = require('dgram')
-var client = dgram.createSocket('udp4');
+const win = nw.Window.get()
+const dgram = require('dgram')
+const Net = require('net')
 
-let host = '127.0.0.1'
-let port = 8080
+let socket = {}
+let host = '10.0.0.10'
+let port = 6666
+let nick = ''
 
-client.on('message', (buffer, remote) => {
-	if (remote.address == host && remote.port == port) {
-		onMessage(buffer.toString('utf8'));
-	}
-});
+let nickInput, addrInput, connectButton
+let myFont
 
-function send(message) {
-	client.send(message, 0, message.length, port, host, (err, bytes) => {
-	});
-}
+const angleSpeed = 0.003
+const moveSpeed = 0.15
+const bulletSpeed = 0.3
+const bulletDecay = 1000 * 1
+const maxLogs = 20
+const mapPad = 100
+const mapZoomInit = 2
+const mapZoom = mapZoomInit
+const mapFog = 3000
+const pelletAngleSpeed = 0.002
 
-let dt = 0;
-
-let angleSpeed = 0.005
-let moveSpeed = 0.2
-let bulletSpeed = 0.3
-
-let messages = []
-
-let pellets = [];
-let bullets = [];
-let rocks = {};
 let stars = []
-let ships = []
+let logs = []
+
+let pelletAngle = 0
+
+// center of viewport
+let cx = 0, cy = 0
+// maximum viewport translation
+let maxTx = 0, maxTy = 0
+
+// local game state
+
+// global game state
+let connected = false
+let joined = false
+let gameOver = false
+let gameFinished = true
+let lastPing = -1
+let myId = -1
 let myShip = {}
+let mapSize = 5000
+let starCount = mapSize / 5
+let untilReset = 0
+let untilStop = 0
 
-let mapSize = 3000
-let mapPad = 100
-let mapZoom = 2
+let pellets = {}
+let bullets = {}
+let rocks = {}
+let ships = {}
 
-let starCount = 1000
+// ----------------------------------------------------------------------------
+// -- Networking
+// ----------------------------------------------------------------------------
 
-let maxEnergy = 5
+let messageBuffer = ''
 
-let lastGarbageTime = 0
-
-let pelletAngle = 0;
-let pelletAngleSpeed = 0.002;
-
-let shakeScreenOn = false;
-let shakeScreenTime = 0;
-let shakeScreenDecay = 1000*0.5;
-
-let gameStartTime = 0;
-let gameTime = 1000*60*5;
-let gameOver = false;
-let gameOverReason = '';
-
-
-function distsq(a, b) {
-	let dx = a.x - b.x
-	let dy = a.y - b.y
-	return dx*dx + dy*dy
+function sendMessage(message) {
+  message += '\n'
+  let prefix = new ArrayBuffer(4)
+  let view = new DataView(prefix);
+  view.setUint32(0, message.length, false);
+  socket.write(Buffer(prefix))
+  socket.write(message)
 }
 
-function outsideView(obj) {
-	return distsq(myShip, obj) > 400*400
-}
-
-function clip(x, lower, upper) {
-    return Math.max(Math.min(x, upper), lower);
-}
-
-function polygon(x, y, radius, npoints) {
-    let angle = TAU / npoints;
-    beginShape();
-    for (let a = 0; a < TAU; a += angle) {
-        let sx = x + Math.cos(a) * radius;
-        let sy = y + Math.sin(a) * radius;
-        vertex(sx, sy);
+function recvMessage() {
+  let received = messageBuffer.split('\n');
+  if (received.length > 1) {
+    for (let i = 0; i < received.length - 1; i++) {
+      let message = received[i]
+      onMessage(message)
     }
-    endShape(CLOSE);
-}
-
-function generateRock(size) {
-    let v = []
-    let a = 0
-    let steps = randomGaussian(10, 2)
-    while (a < TAU) {
-        d = randomGaussian(size/2, 7)
-        v.push([d*cos(a), d*sin(a)])
-        a += randomGaussian(TAU/steps, TAU*10/360)
-    }
-    return v
-}
-
-function randomRock() {
-    phi = random(0, PI);
-    size = randomGaussian(60, 10);
-    return {
-        x: random(0, mapSize),
-        y: random(0, mapSize),
-        dx: cos(phi),
-        dy: sin(phi),
-        speed: randomGaussian(0.005, 0.002),
-        size: size,
-        health: size / 2,
-        maxHealth: size / 2,
-        active: true,
-        vertices: generateRock(size),
-        angleSpeed: randomGaussian(0, 0.0001),
-        angle: 0,
-    };
-
-}
-
-function randomStar() {
-    return {
-        x: random(-mapPad, mapSize + mapPad),
-        y: random(-mapPad, mapSize + mapPad),
-        light: random(50, 100),
-    }
-}
-
-let cx = 0
-let cy = 0
-let minT = 0
-let maxTx = 0
-let maxTy = 0
-
-function updateViewport() {
-    scale(mapZoom);
-	let tx = -clip(myShip.x-cx, minT, maxTx)
-	let ty = -clip(myShip.y-cy, minT, maxTy)
-    translate(tx, ty);
-}
-
-function windowResized() {
-    resizeCanvas(windowWidth, windowHeight);
-
-    cx = windowWidth/2/mapZoom
-    cy = windowHeight/2/mapZoom
-	minT = -mapPad
-	maxTx = mapSize + mapPad - 2*cx
-	maxTy = mapSize + mapPad - 2*cy
-
-    let p = max(windowWidth, windowHeight);
-    let q = windowWidth > windowHeight ? 1920 : 1080;
-    mapZoom = 2.5 * p / q
-}
-
-function setup() {
-    let canvas = createCanvas(windowWidth, windowHeight);
-    canvas.parent('game');
-    frameRate(50);
-    gameStartTime = millis();
-	send('rock');
-	send('join');
-
-    for (let i = 0; i < starCount; i++)
-        stars.push(randomStar());
-
-	/*
-    for (let i = 0; i < 100; i++)
-        rocks.push(randomRock());
-	*/
-
-    windowResized();
+    messageBuffer = received[received.length - 1]
+  }
 }
 
 function onMessage(text) {
-	let msgs = text.split(';').map(x => x.split(','));
+  const msg = text.split(',')
 
-	// bul,id,x,y,dx,dy
+  if (msg[0] == 'pong') {
+    lastPing = millis()
 
-	for (let msg of msgs) {
-		if (msg[0] == 'join-ok') {
-			myShip = {
-				id: Number(msg[1]),
-				x: dint(msg[2]),
-				y: dint(msg[3]),
-				angle: dint(msg[4]),
-				spice: Number(msg[5]),
-				energy: Number(msg[6]),
-				shieldOn: Number(msg[7]),
-			};
-			messages.push({text: `${myShip.id} entered the arena [system]`});
-			joinGame();
+  } else if (msg[0] == 'stat-game') {
+    mapSize = num(msg[2])
+    untilReset = Math.max(num(msg[3]), 0)
+    untilStop = Math.max(num(msg[4]), 0)
+    gameFinished = num(msg[5]) === 1
 
-		} else if (msg[0] == 'rock-ok') {
-			let angle = dint(msg[4])
-			let size = Number(msg[6])
-			let id = Number(msg[1])
-			if (id in rocks) {
-				rocks[id].x = dint(msg[2]);
-				rocks[id].y = dint(msg[3]);
-			} else {
-				rock = {
-					id: id,
-					x: dint(msg[2]),
-					y: dint(msg[3]),
-					dx: Math.cos(angle),
-					dy: Math.sin(angle),
-					speed: dint(msg[5]),
-					size: size,
-					health: Number(msg[7]),
-					maxHealth: size / 2,
-					active: true,
-					angleSpeed: randomGaussian(0, 0.0001),
-					vertices: generateRock(size),
-				};
-				rocks[rock.id] = rock;
-			}
-		} else if (msg[0] == 'newplayer') {
-			id = msg[1];
-			messages.push({text: `${id} entered the arena [system]`});
-		} else if (msg[0] == 'bul') {
-			bullets.push({
-				id: msg[1],
-				x: dint(msg[2]), y: dint(msg[3]),
-				dx: dint(msg[4]), dy: dint(msg[5]),
-			})
-		} else {
-			messages.push({text: `unknown message ${text}`});
-		}
-	}
+  } else if (msg[0] == 'stat-join') {
+    const id = num(msg[1])
+    myShip = new MyShip(id)
+    myId = id
+
+    myShip.x = dint(msg[2])
+    myShip.y = dint(msg[3])
+    myShip.angle = dint(msg[4])
+    myShip.spice = num(msg[5])
+    myShip.energy = num(msg[6])
+    myShip.shield = Boolean(msg[7])
+
+    mapSize = num(msg[8])
+    untilReset = num(msg[9])
+    untilStop = num(msg[10])
+    addLog(`ship ${id} joined the game`)
+
+    joined = true
+
+  } else if (msg[0] == 'stat-ship') {
+    const id = num(msg[1])
+    if (!(id in ships)) ships[id] = new Ship(id)
+    const ship = ships[id]
+
+    ship.x = dint(msg[2])
+    ship.y = dint(msg[3])
+    ship.angle = dint(msg[4])
+    ship.spice = num(msg[5])
+    ship.energy = num(msg[6])
+    ship.shield = num(msg[7]) === 1
+
+  } else if (msg[0] == 'stat-rock') {
+    const id = num(msg[1])
+    if (!(id in rocks)) rocks[id] = new Rock(id)
+    const rock = rocks[id]
+
+    rock.x = dint(msg[2])
+    rock.y = dint(msg[3])
+    rock.angle = dint(msg[4])
+    rock.speed = dint(msg[5])
+    rock.size = num(msg[6])
+    rock.health = num(msg[7])
+
+    if (!('angleSpeed' in rock)) rock.angleSpeed = randomGaussian(0, 0.0001)
+    if (!('vertices' in rock)) rock.vertices = randomPolygon(rock.size)
+
+  } else if (msg[0] == 'stat-bullet') {
+    const id = num(msg[1])
+    const pid = num(msg[2])
+    if (!(id in bullets)) bullets[id] = new Bullet(id, pid)
+    const bullet = bullets[id]
+
+    bullet.x = dint(msg[3])
+    bullet.y = dint(msg[4])
+    bullet.angle = dint(msg[5])
+    bullet.time = num(msg[6])
+
+  } else if (msg[0] == 'stat-pellet') {
+    const id = num(msg[1])
+    if (!(id in bullets)) pellets[id] = new Pellet(id)
+    const pellet = pellets[id]
+
+    pellet.x = dint(msg[2])
+    pellet.y = dint(msg[3])
+    pellet.value = num(msg[4])
+    pellet.type = num(msg[5])
+
+  } else if (msg[0] == 'del-bullet') {
+    const id = num(msg[1])
+    delete bullets[id]
+
+  } else if (msg[0] == 'del-pellet') {
+    const id = num(msg[1])
+    delete pellets[id]
+
+  } else if (msg[0] == 'del-rock') {
+    const id = num(msg[1])
+    delete rocks[id]
+
+  } else if (msg[0] == 'del-ship') {
+    const id = num(msg[1])
+    console.log(`del-ship ${id}`)
+    if (id in ships) delete ships[id]
+    addLog(`ship ${id} met it's end`)
+
+  } else {
+    addLog(`unknown message ${text}`)
+  }
 }
 
-function drawUI() {
-    push();
-    resetMatrix();
-    fill(255);
-    stroke(20);
-    strokeWeight(2);
-
-    textSize(40);
-    textAlign(CENTER);
-    textStyle(BOLD);
-    text('GALACTICA', windowWidth / 2, 50);
-
-    if (gameOver) {
-        textSize(62);
-        text('GAME OVER', windowWidth / 2, windowHeight / 2 - 10);
-        textSize(24);
-        text('PRESS ENTER TO RESPAWN', windowWidth / 2, windowHeight / 2 + 30);
-    }
-
-    textSize(32);
-
-    let remTime = gameTime - (millis() - gameStartTime);
-    let remMin = floor((remTime / 1000) / 60);
-    let remSec = floor((remTime / 1000) % 60);
-    text(`${floor(remMin)}:${floor(remSec)}`, windowWidth / 2, 90);
-
-    textAlign(LEFT);
-    textSize(24);
-    text('STARSHIP STATUS', 20, 35);
-    textSize(18);
-
-    text(`SPICE ${myShip.spice}`, 20, 60)
-    text(`ENERGY ${myShip.energy}`, 20, 80)
-    text(`SHIELD ${myShip.shieldOn ? 'ON' : 'OFF'}`, 20, 100)
-    text(`COORD ${round(myShip.x)} X ${round(myShip.y)} `, 20, 120)
-    text(`FPS ${round(frameRate())} `, 20, 140)
-
-    textAlign(RIGHT);
-    textSize(24);
-    text('CAPTAIN\'S LOG', windowWidth - 20, 35);
-
-    textSize(16);
-    let i = 0;
-    for (let log of messages) {
-        text(`${log.text}`, windowWidth - 20, 57 + i*18);
-		i += 1;
-    }
-
-    pop();
+function shootBullet () {
+  if (!gameOver) {
+    sendMessage(`usr-fired,${myId},${eint(myShip.x)},${eint(myShip.y)},${eint(myShip.angle)}`)
+  }
 }
 
-function drawStars() {
+let syncPlayer = timedLambda(16, () => {
+  if (!joined) return
+  sendMessage(`usr-coord,${myId},${eint(myShip.x)},${eint(myShip.y)},${eint(myShip.angle)}`)
+})
+
+let syncGame = timedLambda(200, () => {
+  sendMessage(`ask-game,${myId}`)
+})
+
+let syncWorld = timedLambda(16, () => {
+  sendMessage(`ask-rock,${myId}`)
+  sendMessage(`ask-ship,${myId}`)
+  sendMessage(`ask-bullet,${myId}`)
+  sendMessage(`ask-pellet,${myId}`)
+})
+
+let syncConnection = timedLambda(1000, () => {
+  sendMessage('ping')
+})
+
+// ----------------------------------------------------------------------------
+// -- Game objects
+// ----------------------------------------------------------------------------
+
+const screenShake = {
+  decay: 0.5 * 1000,
+  enabled: false,
+  time: 0,
+  speed: 0.2,
+
+  toggle() {
+    this.enabled = !this.enabled
+    this.time = 0
+  },
+
+  update() {
+    if (!this.enabled) return
+    this.time += deltaTime
+    if (this.time > this.decay) this.toggle()
+  },
+
+  draw() {
+    if (!this.enabled) return
+    let x = this.speed * this.time
+    translate(sin(x), sin(x))
+  },
+}
+
+class Pellet {
+  constructor(id) {
+    this.id = id
+  }
+
+  update() {
+    if (distsq(myShip, this) < 64) {
+      sendMessage(`hit-pellet,${myId},${this.id}`)
+      delete pellets[this.id]
+    }
+  }
+
+  draw() {
+    //if (outsideView(this)) return
     push()
-    strokeWeight(1);
-    for (let star of stars) {
-		if (outsideView(star)) continue;
-        stroke(star.light/100*255)
-        rect(star.x, star.y, 1, 1);
-    }
-    pop();
-}
-
-function updateShip(ship) {
-    ship.shieldOnTime += deltaTime;
-    if (ship.shieldOnTime > ship.shieldDecay) {
-        ship.shieldOn = false;
-    }
-}
-
-function enableShield(ship, decay) {
-    ship.shieldOn = true;
-    ship.shieldOnTime = 0;
-    ship.shieldDecay = decay;
-}
-
-function joinGame() {
-    gameOver = false;
-    enableShield(myShip, 4*1000);
-}
-
-function enableScreenShake() {
-    shakeScreenOn = true;
-    shakeScreenTime = 0;
-}
-
-function updateScreenShake() {
-    if (!shakeScreenOn) return;
-    translate(sin(shakeScreenTime/5), sin(shakeScreenTime/5));
-    shakeScreenTime += deltaTime;
-    if (shakeScreenTime > shakeScreenDecay) {
-        shakeScreenOn = false;
-        shakeScreenTime = 0;
-    }
-}
-
-function didGameOver() {
-    gameOver = true;
-}
-
-function shipCollided(ship) {
-    enableScreenShake();
-    ship.energy -= 5;
-    if (ship.energy < 0) {
-        gameOverReason = 'asteroid'
-        didGameOver();
+    translate(this.x, this.y)
+    rotate(pelletAngle)
+    if (this.type == 1) {
+      stroke(60, 100, 100)
+      rect(-2, -2, 4, 4)
     } else {
-        enableShield(ship, 1000*2);
+      rect(-2, -2, 4, 4)
     }
+    pop()
+  }
 }
 
-function shipGotShot(ship) {
-    enableScreenShake();
-    ship.energy -= 1;
-    if (ship.energy < 0) {
-        gameOverReason = 'player'
-        ship.didGameOver();
-    } else {
-        enableShield(ship, 1000*0.5);
-    }
-}
+class Bullet {
+  constructor(id, pid) {
+    this.id = id
+    this.pid = pid
+  }
 
-function drawShip(ship) {
-    push();
-    translate(ship.x, ship.y)
+  update() {
+    /*
+    this.x += dt * bulletSpeed * Math.cos(this.angle)
+    this.y += dt * bulletSpeed * Math.sin(this.angle)
+    this.time += dt
+    */
 
-    if (ship === myShip && shakeScreenOn) {
-        stroke(0, 100 * (1 - shakeScreenTime / shakeScreenDecay), 100)
-    }
-
-    if (ship.shieldOn) {
-        push();
-        rotate(pelletAngle);
-        polygon(0, 0, 30, 6);
-        pop();
+    if (this.time > bulletDecay) {
+      delete bullets[this.id]
+      return
     }
 
-    if (ship !== myShip || !shakeScreenOn) {
-        stroke(0, 100*(1 - ship.energy/maxEnergy), 100)
+    if (this.x < 0 || this.x > mapSize || this.y < 0 || this.y > mapSize) {
+      delete bullets[this.id]
+      return
     }
 
-    rotate(ship.angle)
-    triangle(-6, -5, -6, 5, 6, 0);
-    pop();
-}
-
-function drawRock(rock) {
-	if (outsideView(rock)) return;
-    push();
-    stroke(0, 100 - 100 * rock.health/rock.maxHealth, 100);
-    translate(rock.x, rock.y);
-    rotate(rock.angle);
-    beginShape();
-    for (let v of rock.vertices)
-        vertex(v[0], v[1]);
-    endShape(CLOSE);
-    pop();
-}
-
-function drawPellet(pellet) {
-	if (outsideView(pellet)) return;
-    push();
-    translate(pellet.x, pellet.y);
-    rotate(pelletAngle);
-    if (pellet.fuel) {
-		stroke(60, 100, 100);
-        rect(-2, -2, 4, 4);
-    } else {
-        rect(-2, -2, 4, 4);
-    }
-    pop();
-}
-
-function collidePellet(pellet) {
-    if (distsq(myShip, pellet) < 64) {
-        pellet.active = false;
-        if (pellet.fuel) {
-            myShip.energy += 5;
-        } else {
-            myShip.spice += 10;
+    for (const id in rocks) {
+      const rock = rocks[id]
+      if (dist(this.x, this.y, rock.x, rock.y) < rock.size / 2) {
+        sendMessage(`shot-rock,${myId},${rock.id},${this.id}`)
+        delete bullets[this.id]
+        if (rock.health <= 1) {
+          delete rocks[rock.id]
         }
-    }
-}
-
-function generateSpice(rock) {
-    count = randomGaussian(5, 1); 
-    for (let i = 0; i < count; i++) {
-        px = randomGaussian(rock.x, rock.size/4);
-        if (px < 0 || px > mapSize) continue;
-        py = randomGaussian(rock.y, rock.size/4);
-        if (py < 0 || py > mapSize) continue;
-        fuel = random(1000) < 5;
-        pellets.push({x: px, y: py, fuel: fuel, active: true});
-    }
-}
-
-function collideBullet(bullet) {
-    if (bullet.x < 0 || bullet.x > mapSize || bullet.y < 0 || bullet.y > mapSize) {
-        bullet.active = false;
-        return;
+        return
+      }
     }
 
-    //if (!shieldOn && bullet.player != playerId && dist(x, y, bullet.x, bullet.y) < 0) shipGotShot();
-
-    for (let id in rocks) {
-		let rock = rocks[id]
-        if (!rock.active) continue;
-        if (dist(bullet.x, bullet.y, rock.x, rock.y) < rock.size/2) {
-            bullet.active = false;
-            rock.health -= 10;
-            if (rock.health <= 0) {
-                rock.active = false;
-                generateSpice(rock);
-            }
-        }
+    for (const id in ships) {
+      const ship = ships[id]
+      if (ship.id == this.id) continue
+      if (ship.shield) continue
+      if (dist(this.x, this.y, ship.x, ship.y) > 5) continue
+      sendMessage(`shot-ship,${myId},${ship.id},${this.id}`)
+      delete bullets[this.id]
+      if (ship.health <= 0) {
+        delete ships[ship.id]
+      }
+      return
     }
+  }
+
+  draw() {
+    push()
+    fill(0)
+    stroke(100 + 20 * log(1 - Math.max(this.time, 0) / bulletDecay))
+    circle(this.x, this.y, 1)
+    pop()
+  }
 }
 
-function collideRock(rock) {
-    if (rock.x < -mapPad || rock.x > mapSize+mapPad || rock.y < mapPad || rock.y > mapSize+mapPad) {
-        rock.active = false;
-        return;
+class Rock {
+  constructor(id) {
+    this.id = id
+  }
+
+  update() {
+    /*
+    this.angle += dt * this.angleSpeed
+    this.x += dt * this.speed * Math.cos(this.angle)
+    this.y += dt * this.speed * Math.sin(this.angle)
+    */
+
+    // if (this.x < -mapPad || this.x > mapSize + mapPad || this.y < mapPad || this.y > mapSize + mapPad) {
+    if (this.x < 0 || this.x > mapSize || this.y < 0 || this.y > mapSize) {
+      delete rocks[this.id]
+      return
     }
 
-    if (!gameOver && !myShip.shieldOn && dist(myShip.x, myShip.y, rock.x, rock.y) < rock.size/2 - 2) {
-        shipCollided(myShip);
+    if (!gameOver && !myShip.shield && dist(myShip.x, myShip.y, this.x, this.y) < this.size / 2 - 2) {
+      sendMessage(`hit-rock,${myId},${this.id}`)
+      enableScreenShake()
     }
+  }
+
+  draw() {
+    //if (outsideView(this)) return
+    push()
+    fill(0)
+    stroke(0, 100 - 100 * this.health / this.maxHealth, 100)
+    translate(this.x, this.y)
+    rotate(this.angle)
+    beginShape()
+    for (const v of this.vertices) vertex(v[0], v[1])
+    endShape(CLOSE)
+    pop()
+  }
 }
 
-function collectGarbage() {
-    if (millis() - lastGarbageTime < 1000) return;
-    lastGarbageTime = millis();
-	console.log('garbage');
-    bullets = bullets.filter(x => x.active);
-    //rocks = rocks.filter(x => x.active);
-    pellets = pellets.filter(x => x.active);
+class Ship {
+  constructor(id) {
+    this.id = id
+  }
 
-	send('rock');
+  update() {
+    // ship.shieldOnTime += deltaTime
+    // if (ship.shieldOnTime > ship.shieldDecay) {
+    //  ship.shield = false
+    // }
+  }
+
+  draw() {
+    push()
+    translate(this.x, this.y)
+    if (this.shield) {
+      push()
+      rotate(pelletAngle)
+      polygon(0, 0, 30, 6)
+      pop()
+    }
+    fill(0)
+    rotate(this.angle)
+    triangle(-6, -5, -6, 5, 6, 0)
+    pop()
+  }
 }
 
-function eint(x) { return floor(x * 1000) }
-function dint(x) { return Number(x) / 1000 }
+class MyShip {
+  constructor(id) {
+    this.id = id
+  }
 
-function sendMovement(o) {
-	send(`pos,${o.id},${eint(o.x)},${eint(o.y)},${eint(o.angle)}`);
-}
-
-function sendBullet(o) {
-	send(`bul,${o.id},${eint(o.x)},${eint(o.y)},${eint(o.dx)},${eint(o.dy)}`);
-}
-
-function processMovement() {
-    let ship = myShip
+  update() {
     if (keyIsDown(LEFT_ARROW)) {
-        ship.angle -= dt * angleSpeed;
-		ship.angle %= TAU
+      this.angle -= dt * angleSpeed
+      this.angle %= TAU
     }
     if (keyIsDown(RIGHT_ARROW)) {
-        ship.angle += dt * angleSpeed;
-		ship.angle %= TAU
+      this.angle += dt * angleSpeed
+      this.angle %= TAU
     }
     if (keyIsDown(UP_ARROW)) {
-        ship.x += dt * moveSpeed * Math.cos(ship.angle);
-        ship.y += dt * moveSpeed * Math.sin(ship.angle);
+      this.x += dt * moveSpeed * Math.cos(this.angle)
+      this.y += dt * moveSpeed * Math.sin(this.angle)
     }
     if (keyIsDown(DOWN_ARROW)) {
-        ship.x -= dt * moveSpeed * Math.cos(ship.angle);
-        ship.y -= dt * moveSpeed * Math.sin(ship.angle);
+      this.x -= dt * moveSpeed * Math.cos(this.angle)
+      this.y -= dt * moveSpeed * Math.sin(this.angle)
     }
-    ship.x = clip(ship.x, 0, mapSize);
-    ship.y = clip(ship.y, 0, mapSize);
-	sendMovement(myShip);
+    this.x = clip(this.x, 0, mapSize)
+    this.y = clip(this.y, 0, mapSize)
+  }
+
+  draw() {
+    push()
+    translate(this.x, this.y)
+    /*
+    if (this.shield) {
+      push()
+      rotate(pelletAngle)
+      polygon(0, 0, 30, 6)
+      pop()
+    }
+
+    stroke(255)
+    if (screenShake.enabled) {
+      stroke(0, 100 * (1 - screenShake.time / screenShake.decay), 100)
+    }
+
+    if (!screenShake.enabled) {
+      stroke(0, 100 * (1 - this.energy / maxEnergy), 100)
+    }
+    */
+
+    fill(0)
+    rotate(this.angle)
+    triangle(-6, -5, -6, 5, 6, 0)
+    pop()
+  }
+
 }
 
-function drawRocks() {
-    for (let id in rocks) {
-		let rock = rocks[id]
-        if (!rock.active) continue;
-        //rock.angle += dt * rock.angleSpeed;
-        rock.x += dt * rock.speed * rock.dx;
-        rock.y += dt * rock.speed * rock.dy;
-        drawRock(rock);
-        collideRock(rock);
-    }
+
+
+// ----------------------------------------------------------------------------
+// -- Views
+// ----------------------------------------------------------------------------
+
+let currentView = {}
+
+function segueTo(view) {
+  if (!!currentView.onExit) currentView.onExit()
+  currentView = view
+  if (!!currentView.onShow) currentView.onShow()
 }
 
-function drawPellets() {
-    pelletAngle += dt * pelletAngleSpeed;
-    for (let pellet of pellets) {
-        if (!pellet.active) continue;
-        drawPellet(pellet);
-        collidePellet(pellet);
+const loginView = {
+  message: '',
+  connecting: false,
+  connTimeout: 3*1000,
+  connTime: 0,
+
+  onShow() {
+    connectButton.mousePressed(() => this.onConnect());
+    connectButton.show()
+    addrInput.show()
+    nickInput.show()
+  },
+
+  onExit() {
+    this.connecting = false;
+    this.connTime = 0;
+    this.message = '';
+    connectButton.hide()
+    addrInput.hide()
+    nickInput.hide()
+  },
+
+  keyPressed() {
+    if (keyCode == 13 /* enter */) this.onConnect()
+  },
+
+  onConnect() {
+    this.connecting = true
+    this.connTime = 0
+    this.message = 'connecting...'
+
+    addr = addrInput.value().split(':')
+    host = addr[0]
+    port = Number(addr[1])
+    nick = nickInput.value()
+    socket = dgram.createSocket('udp4')
+
+    socket = new Net.Socket()
+
+    socket.connect({host: host, port: port}, () => {
+      connected = true
+    })
+
+    socket.on('data', data => {
+      messageBuffer += data
+      recvMessage()
+    })
+
+    socket.on('end', () => {
+      connected = false
+    })
+
+    //socket.on('message', (buffer, remote) => {
+    //  if (remote.address == host && remote.port == port)
+    //    onMessage(buffer.toString('utf8'))
+    //})
+  },
+
+  onTimeout() {
+    this.connecting = false
+    this.connTime = 0
+    this.message = 'connection timed out'
+  },
+
+  update() {
+    if (this.connecting) {
+      syncConnection()
+      if (connected) segueTo(lobbyView)
+      this.connTime += deltaTime
+      if (this.connTime > this.connTimeout) this.onTimeout()
     }
+  },
+
+  draw() {
+    drawStars()
+  },
+
+  drawUI() {
+    drawText(this.message, windowWidth / 2, 80, 'monospace', 18, CENTER)
+    drawText('Max Adamski', 20, windowHeight - 20, 'monospace', 14, LEFT)
+  }
 }
 
-function drawBullets() {
-    push();
-    fill(0);
-    bulletDecay = 1000 * 1
-    for (let bullet of bullets) {
-        if (bullet.time > bulletDecay) bullet.active = false;
-        if (!bullet.active) continue;
 
-        stroke(100 + 20*log(1 - bullet.time / bulletDecay));
-        circle(bullet.x, bullet.y, 1);
-        bullet.x += dt * bulletSpeed * bullet.dx;
-        bullet.y += dt * bulletSpeed * bullet.dy;
-        bullet.time += dt
-        collideBullet(bullet);
+const lobbyView = {
+  banner: '',
+
+  onShow() {
+    generateStars()
+  },
+
+  update() {
+    syncConnection()
+    syncGame()
+    if (joined) {
+      segueTo(gameView)
     }
-    pop();
+    if (!connected) {
+      loginView.message = 'disconnected from server'
+      segueTo(loginView)
+    }
+  },
+
+  draw() {
+    updateViewport()
+    drawStars()
+  },
+
+  keyPressed() {
+    if (keyCode == 13 /* enter */) sendMessage('join')
+  },
+
+  drawUI() {
+    drawTimer()
+    drawText(this.banner, windowWidth/2, windowHeight/2, myFont, 80, CENTER)
+    drawText('lobby', 20, 35, myFont, 24, LEFT)
+    drawText('leaderboard', windowWidth - 20, 35, myFont, 24, RIGHT)
+    drawText(this.statusMessage(), 20, 60, 'monospace', 18, LEFT)
+    drawText(this.leaderboardText(), windowWidth - 20, 57, 'monospace', 18, RIGHT)
+
+    /*
+    if (gameOver) {
+      textSize(62)
+      text('game over', windowWidth / 2, windowHeight / 2 - 10)
+      textSize(24)
+      text('press enter to respawn', windowWidth / 2, windowHeight / 2 + 30)
+    }
+    */
+  },
+
+  statusMessage() {
+    if (untilStop > 0) return 'game is in progress\npress ENTER to join the arena'
+    if (untilReset > 0) return `preparing the next game\nplease wait ${timeStr(untilReset)}`
+    return 'unknown game status'
+  },
+
+  leaderboardText() {
+    let text = ''
+    for (let i = 1; i <= 9; i++) {
+      let spice = 1000
+      spice = spice.toString().padStart(6, ' ')
+      text += `${i}. someone somewhere ${spice} SPICE\n`
+    }
+    return text
+  },
 }
 
-function drawEnemyShips() {
-    for (let ship of ships) {
-        drawShip(ship);
+const gameView = {
+  update() {
+    syncConnection()
+    syncWorld()
+    syncPlayer()
+
+    updateViewport()
+    screenShake.update()
+
+    if (!connected) {
+      loginView.message = 'disconnected from server'
+      segueTo(loginView)
     }
+
+    if (gameOver) {
+      lobbyView.banner = 'game over'
+      segueTo(lobbyView)
+    }
+
+    pelletAngle += dt * pelletAngleSpeed
+    //console.log('')
+    myShip.update()
+    for (const id in pellets) pellets[id].update()
+    for (const id in bullets) bullets[id].update()
+    for (const id in rocks) rocks[id].update()
+    for (const id in ships) ships[id].update()
+  },
+
+  keyPressed() {
+    if (keyCode == 32 /* space */) shootBullet()
+  },
+
+  draw() {
+    rect(0, 0, mapSize, mapSize)
+    drawStars()
+    myShip.draw()
+    for (const id in bullets) bullets[id].draw()
+    for (const id in rocks) rocks[id].draw()
+    for (const id in pellets) pellets[id].draw()
+    for (const id in ships) ships[id].draw()
+  },
+
+  drawUI() {
+    drawTimer()
+    textFont(myFont, 24);
+    textAlign(LEFT)
+    text('starship status', 20, 35)
+    textAlign(RIGHT)
+    text('captain\'s log', windowWidth - 20, 35)
+
+    textFont('monospace', 18)
+    textAlign(LEFT)
+    text(this.myStatus(), 20, 60)
+    textAlign(RIGHT)
+    text(logs.join('\n'), windowWidth -20, 57)
+  },
+
+  myStatus() {
+    return `
+      SPICE  ${myShip.spice}
+      ENERGY ${myShip.energy}
+      SHIELD ${myShip.shield ? 'ON' : 'OFF'}
+      COORDS ${round(myShip.x)} X ${round(myShip.y)}`
+  },
+}
+
+
+// ----------------------------------------------------------------------------
+// -- P5 callbacks
+// ----------------------------------------------------------------------------
+
+function preload() {
+  myFont = loadFont('brfont.ttf')
+}
+
+function windowResized() {
+  resizeCanvas(windowWidth, windowHeight)
+
+  nickInput.position(windowWidth/2 - 170, windowHeight/2 - 50)
+  addrInput.position(windowWidth/2 - 170, windowHeight/2 - 0)
+  connectButton.position(windowWidth/2 - 170, windowHeight/2 + 50)
+
+  cx = windowWidth / 2 / mapZoom
+  cy = windowHeight / 2 / mapZoom
+  maxTx = mapSize + mapPad - 2 * cx
+  maxTy = mapSize + mapPad - 2 * cy
+
+  // let p = max(windowWidth, windowHeight);
+  // let q = windowWidth > windowHeight ? 1920 : 1080;
+  // mapZoom = mapZoomInit * p / q
+}
+
+function setup() {
+  const canvas = createCanvas(windowWidth, windowHeight)
+  canvas.parent('game')
+  frameRate(50)
+
+  nick = randomNick();
+  nickInput = createInput(nick);
+  addrInput = createInput(host+':'+port);
+  connectButton = createButton('CONNECT');
+
+  windowResized()
+  generateStars()
+  segueTo(loginView)
 }
 
 function draw() {
-    dt = deltaTime;
+  dt = deltaTime
+  currentView.update()
 
-    colorMode(HSB, 100);
-    background(0);
-    noFill();
-    strokeWeight(2);
-    strokeCap(SQUARE);
-    stroke(255);
+  colorMode(HSB, 100)
+  strokeCap(SQUARE)
+  strokeWeight(2)
+  background(0)
 
-    if (!gameOver) {
-        processMovement();
-    }
+  noFill()
+  stroke(255)
 
-	updateViewport();
-    updateScreenShake();
+  currentView.draw()
 
-    rect(0, 0, mapSize, mapSize);
-    drawStars();
+  resetMatrix()
+  fill(255)
+  noStroke()
 
-    drawPellets();
-    drawBullets();
-    drawRocks();
-    drawEnemyShips();
+  currentView.drawUI()
 
-    if (!gameOver) {
-        updateShip(myShip);
-        drawShip(myShip);
-    }
-
-    drawUI();
-
-    collectGarbage();
+  drawText('galActica', windowWidth / 2, 50, myFont, 40, CENTER)
+  drawText(`FPS: ${floor(frameRate())}`, windowWidth - 20, windowHeight - 20, 'monospace', 24, RIGHT)
 }
 
-function keyPressed() {
-    if (keyCode == 32) { // space
-		bullet = {
-			id: myShip.id,
-			x: myShip.x, y: myShip.y,
-			dx: Math.cos(myShip.angle),
-			dy: Math.sin(myShip.angle),
-			time: 0, active: true
-		};
-        if (!gameOver) {
-			bullets.push(bullet);
-			sendBullet(bullet);
-		}
-    }
-    if (keyCode == 13) { // enter
-        joinGame();
-    }
-	if (keyCode == 82) { // enter
-		win.reload();
-	}
+function keyPressed () {
+  if (keyCode == 82 /* R */) win.reload()
+  if (!!currentView.keyPressed) currentView.keyPressed()
 }
 
+
+
+// ----------------------------------------------------------------------------
+// -- Misc functions
+// ----------------------------------------------------------------------------
+
+
+function generateStars() {
+  starCount = mapSize / 5
+  stars = []
+  for (let i = 0; i < starCount; i++) stars.push(randomStar())
+}
+
+function drawStars() {
+  push()
+  strokeWeight(1)
+  for (const star of stars) {
+    if (outsideView(star)) continue
+    stroke(star.light / 100 * 255)
+    rect(star.x, star.y, 1, 1)
+  }
+  pop()
+}
+
+function drawTimer() {
+    textFont(myFont, 36);
+    textAlign(CENTER)
+    text(timeStr(untilStop), windowWidth / 2, 90)
+}
+
+function updateViewport() {
+  const tx = -clip(myShip.x - cx, -mapPad, maxTx)
+  const ty = -clip(myShip.y - cy, -mapPad, maxTy)
+  scale(mapZoom)
+  translate(tx, ty)
+}
+
+
+function randomNick () {
+  const firstName = 'spicy,evil,chaotic,lawful,crazy,drunk,speedy,nice,kind,enlightened'.split(',')
+  const lastName = 'human,martian,captain,commander,emperor,racer,slime,goblin,space wizard,black hole'.split(',')
+  return firstName[Math.floor(Math.random()*10)]+' '+lastName[Math.floor(Math.random()*10)]
+}
+
+function outsideView (obj) {
+  return distsq(myShip, obj) > mapFog * mapFog
+}
+
+function randomStar() {
+  return {
+    x: random(-mapPad, mapSize + mapPad),
+    y: random(-mapPad, mapSize + mapPad),
+    light: random(50, 100)
+  }
+}
+
+function addLog(log) {
+  logs.push(log)
+  if (logs.length > maxLogs) logs = logs.slice(-maxLogs + 1)
+}
