@@ -15,8 +15,11 @@
 #include <string>
 #include <map>
 
+using std::string;
+using std::map;
+
 struct NicePoll {
-    std::map<i32, void (*)(i32, u32)> handlers;
+    map<i32, void (*)(i32, u32)> handlers;
     u64 max_events = 64;
     i32 epoll_fd;
 
@@ -60,7 +63,7 @@ inline i32 make_nonblocking(i32 fd) {
     return ioctl(fd, FIONBIO, &one);
 }
 
-inline void xsend(i32 fd, std::string x) {
+inline void xsend(i32 fd, string x) {
     x += "\n";
     const char *buffer = x.c_str();
     u32 length = x.size();
@@ -69,31 +72,31 @@ inline void xsend(i32 fd, std::string x) {
         written += write(fd, buffer + written, length - written);
 }
 
-inline std::string xrecv(i32 fd) {
-    u8 prefix[4];
-    read(fd, prefix, 4);
+map<i32, string> buffers;
 
-    u32 length = 0;
-    for (i32 i = 0; i < 4; i++)
-        length = length << 8 | prefix[i];
+inline string xrecv(i32 fd) {
+    const i32 max_length = 1024;
+    static u8 buffer[max_length];
 
-    u8 buffer[1024];
-    u32 real_length = 0;
-    while (real_length < length)
-        real_length += read(fd, buffer, length - real_length);
+    i32 length = read(fd, buffer, max_length);
+    if (length <= 0) {
+        printf("could not read message from fd %d\n", fd);
+        return "";
+    }
+    
+    string chunk(buffer, buffer + length);
+    if (buffers.find(fd) != buffers.end()) {
+        chunk = buffers[fd] + chunk;
+    }
 
-    std::string s;
-    try {
-        s = std::string(buffer, buffer + length - 1);
-    } catch (...) {
-        if (buffer[length-1] != '\n') {
-            cout << "[warn] malformed message - " << s << endl;
-            u8 sep[1] = {0};
-            while (sep[0] != '\n') read(fd, sep, 1);
-            cout << "[info] realigned stream\n";
-        }
+    i64 marker = chunk.find("\n");
+    if (marker == string::npos) {
+        buffers[fd] = chunk;
+        printf("whole message did not arrive from fd %d\n", fd);
         return "";
     }
 
-    return s;
+    string message = chunk.substr(0, marker);
+    buffers[fd] = chunk.substr(marker+1, chunk.size());
+    return message;
 }
