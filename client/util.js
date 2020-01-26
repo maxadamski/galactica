@@ -35,10 +35,9 @@ function polygon(x, y, radius, sides) {
 function randomPolygon(size) {
   const v = []
   const steps = randomGaussian(10, 2)
-  for (let a = 0; a < TAU; a+= randomGaussian(TAU / steps, TAU / 36)) {
+  for (let a = 0; a < TAU; a += randomGaussian(TAU / steps, TAU / 36)) {
     d = randomGaussian(size / 2, 7)
     v.push([d * cos(a), d * sin(a)])
-    a += randomGaussian(TAU / steps, TAU * 10 / 360)
   }
   return v
 }

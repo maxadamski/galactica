@@ -1,10 +1,15 @@
 #pragma once
 
 #include "util.hh"
+#include "nicenet.hh"
 
 const i32 SHIELD_SHIP_DECAY = 0.5*1000;
 const i32 SHIELD_ROCK_DECAY = 2*1000;
 const i32 SHIELD_INIT_DECAY = 5*1000;
+
+map<i32, i32> client_player;
+map<i32, thread> world_updates;
+map<i32, i32> last_ping;
 
 struct Player {
     i32 id, x, y, angle, spice, energy, shield, shield_time, shield_decay;
@@ -88,6 +93,7 @@ struct Game {
         }
     }
 
+
     inline void step(float dt) {
         if (reset) {
             return;
@@ -108,10 +114,38 @@ struct Game {
 
         vector<i32> del_rocks, del_bullets;
 
-
         for (auto const& [id, it] : players.data) {
             Player &player = players.data[id];
             player.update_shield(dt);
+
+
+            if (player.shield) continue;
+
+            for (auto const& [obj_id, obj] : rocks.data) {
+                if (dist(it.x, it.y, obj.x, obj.y) < obj.size) {
+                    player.energy -= 1;
+                    if (player.energy <= 0) {
+                        spawn_pellets(player);
+                    } else {
+                        player.enable_shield(SHIELD_ROCK_DECAY);
+                    }
+                    break;
+                }
+            }
+
+            for (auto const& [obj_id, obj] : bullets.data) {
+                if (id == obj.pid) continue;
+                if (dist(it.x, it.y, obj.x, obj.y)/1000.0 < 2) {
+                    del_bullets.push_back(obj_id);
+                    player.energy -= 1;
+                    if (player.energy <= 0) {
+                        spawn_pellets(player);
+                    } else {
+                        player.enable_shield(SHIELD_SHIP_DECAY);
+                    }
+                    break;
+                }
+            }
         }
 
         for (auto const& [id, it] : rocks.data) {
@@ -199,4 +233,3 @@ struct Game {
     }
 
 };
-

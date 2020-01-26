@@ -12,8 +12,11 @@
 #include <netinet/in.h> 
 #include <fcntl.h>
 
+#include <string>
+#include <map>
+
 struct NicePoll {
-    map<i32, void (*)(i32, u32)> handlers;
+    std::map<i32, void (*)(i32, u32)> handlers;
     u64 max_events = 64;
     i32 epoll_fd;
 
@@ -55,4 +58,42 @@ inline i32 make_reusable(i32 fd) {
 inline i32 make_nonblocking(i32 fd) {
     const i32 one = 1;
     return ioctl(fd, FIONBIO, &one);
+}
+
+inline void xsend(i32 fd, std::string x) {
+    x += "\n";
+    const char *buffer = x.c_str();
+    u32 length = x.size();
+    u32 written = 0;
+    while (written < length)
+        written += write(fd, buffer + written, length - written);
+}
+
+inline std::string xrecv(i32 fd) {
+    u8 prefix[4];
+    read(fd, prefix, 4);
+
+    u32 length = 0;
+    for (i32 i = 0; i < 4; i++)
+        length = length << 8 | prefix[i];
+
+    u8 buffer[1024];
+    u32 real_length = 0;
+    while (real_length < length)
+        real_length += read(fd, buffer, length - real_length);
+
+    std::string s;
+    try {
+        s = std::string(buffer, buffer + length - 1);
+    } catch (...) {
+        if (buffer[length-1] != '\n') {
+            cout << "[warn] malformed message - " << s << endl;
+            u8 sep[1] = {0};
+            while (sep[0] != '\n') read(fd, sep, 1);
+            cout << "[info] realigned stream\n";
+        }
+        return "";
+    }
+
+    return s;
 }

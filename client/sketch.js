@@ -87,13 +87,7 @@ function onMessage(text) {
   if (msg[0] == 'pong') {
     lastPing = millis()
 
-  } else if (msg[0] == 'stat-game') {
-    mapSize = num(msg[2])
-    untilReset = Math.max(num(msg[3]), 0)
-    untilStop = Math.max(num(msg[4]), 0)
-    gameFinished = num(msg[5]) === 1
-
-  } else if (msg[0] == 'stat-join') {
+  } else if (msg[0] == 'join') {
     const id = num(msg[1])
     myShip = new MyShip(id)
     myId = id
@@ -101,9 +95,6 @@ function onMessage(text) {
     myShip.x = dint(msg[2])
     myShip.y = dint(msg[3])
     myShip.angle = dint(msg[4])
-    myShip.spice = num(msg[5])
-    myShip.energy = num(msg[6])
-    myShip.shield = Boolean(msg[7])
 
     mapSize = num(msg[8])
     untilReset = num(msg[9])
@@ -112,17 +103,31 @@ function onMessage(text) {
 
     joined = true
 
+  } else if (msg[0] == 'stat-game') {
+    mapSize = num(msg[1])
+    untilReset = Math.max(num(msg[2]), 0)
+    untilStop = Math.max(num(msg[3]), 0)
+    gameFinished = num(msg[4]) === 1
+
   } else if (msg[0] == 'stat-ship') {
     const id = num(msg[1])
-    if (!(id in ships)) ships[id] = new Ship(id)
-    const ship = ships[id]
+    if (id == myId) {
+      const ship = myShip
+      ship.spice = num(msg[5])
+      ship.energy = num(msg[6])
+      ship.shield = num(msg[7]) === 1
 
-    ship.x = dint(msg[2])
-    ship.y = dint(msg[3])
-    ship.angle = dint(msg[4])
-    ship.spice = num(msg[5])
-    ship.energy = num(msg[6])
-    ship.shield = num(msg[7]) === 1
+    } else {
+      if (!(id in ships)) ships[id] = new Ship(id)
+      const ship = ships[id]
+
+      ship.x = dint(msg[2])
+      ship.y = dint(msg[3])
+      ship.angle = dint(msg[4])
+      ship.spice = num(msg[5])
+      ship.energy = num(msg[6])
+      ship.shield = num(msg[7]) === 1
+    }
 
   } else if (msg[0] == 'stat-rock') {
     const id = num(msg[1])
@@ -162,19 +167,20 @@ function onMessage(text) {
 
   } else if (msg[0] == 'del-bullet') {
     const id = num(msg[1])
-    delete bullets[id]
+    if (id in bullets) delete bullets[id]
 
   } else if (msg[0] == 'del-pellet') {
     const id = num(msg[1])
-    delete pellets[id]
+    if (id in pellets) delete pellets[id]
 
   } else if (msg[0] == 'del-rock') {
     const id = num(msg[1])
-    delete rocks[id]
+    if (id in rocks) delete rocks[id]
 
   } else if (msg[0] == 'del-ship') {
     const id = num(msg[1])
     console.log(`del-ship ${id}`)
+    if (id == myId) gameOver = true
     if (id in ships) delete ships[id]
     addLog(`ship ${id} met it's end`)
 
@@ -184,25 +190,12 @@ function onMessage(text) {
 }
 
 function shootBullet () {
-  if (!gameOver) {
-    sendMessage(`usr-fired,${myId},${eint(myShip.x)},${eint(myShip.y)},${eint(myShip.angle)}`)
-  }
+  sendMessage(`usr-fired,${myId},${eint(myShip.x)},${eint(myShip.y)},${eint(myShip.angle)}`)
 }
 
 let syncPlayer = timedLambda(16, () => {
   if (!joined) return
   sendMessage(`usr-coord,${myId},${eint(myShip.x)},${eint(myShip.y)},${eint(myShip.angle)}`)
-})
-
-let syncGame = timedLambda(200, () => {
-  sendMessage(`ask-game,${myId}`)
-})
-
-let syncWorld = timedLambda(16, () => {
-  sendMessage(`ask-rock,${myId}`)
-  sendMessage(`ask-ship,${myId}`)
-  sendMessage(`ask-bullet,${myId}`)
-  sendMessage(`ask-pellet,${myId}`)
 })
 
 let syncConnection = timedLambda(1000, () => {
@@ -276,41 +269,6 @@ class Bullet {
     this.y += dt * bulletSpeed * Math.sin(this.angle)
     this.time += dt
     */
-
-    if (this.time > bulletDecay) {
-      delete bullets[this.id]
-      return
-    }
-
-    if (this.x < 0 || this.x > mapSize || this.y < 0 || this.y > mapSize) {
-      delete bullets[this.id]
-      return
-    }
-
-    for (const id in rocks) {
-      const rock = rocks[id]
-      if (dist(this.x, this.y, rock.x, rock.y) < rock.size / 2) {
-        sendMessage(`shot-rock,${myId},${rock.id},${this.id}`)
-        delete bullets[this.id]
-        if (rock.health <= 1) {
-          delete rocks[rock.id]
-        }
-        return
-      }
-    }
-
-    for (const id in ships) {
-      const ship = ships[id]
-      if (ship.id == this.id) continue
-      if (ship.shield) continue
-      if (dist(this.x, this.y, ship.x, ship.y) > 5) continue
-      sendMessage(`shot-ship,${myId},${ship.id},${this.id}`)
-      delete bullets[this.id]
-      if (ship.health <= 0) {
-        delete ships[ship.id]
-      }
-      return
-    }
   }
 
   draw() {
@@ -333,17 +291,6 @@ class Rock {
     this.x += dt * this.speed * Math.cos(this.angle)
     this.y += dt * this.speed * Math.sin(this.angle)
     */
-
-    // if (this.x < -mapPad || this.x > mapSize + mapPad || this.y < mapPad || this.y > mapSize + mapPad) {
-    if (this.x < 0 || this.x > mapSize || this.y < 0 || this.y > mapSize) {
-      delete rocks[this.id]
-      return
-    }
-
-    if (!gameOver && !myShip.shield && dist(myShip.x, myShip.y, this.x, this.y) < this.size / 2 - 2) {
-      sendMessage(`hit-rock,${myId},${this.id}`)
-      enableScreenShake()
-    }
   }
 
   draw() {
@@ -366,10 +313,6 @@ class Ship {
   }
 
   update() {
-    // ship.shieldOnTime += deltaTime
-    // if (ship.shieldOnTime > ship.shieldDecay) {
-    //  ship.shield = false
-    // }
   }
 
   draw() {
@@ -417,7 +360,7 @@ class MyShip {
   draw() {
     push()
     translate(this.x, this.y)
-    /*
+
     if (this.shield) {
       push()
       rotate(pelletAngle)
@@ -431,9 +374,8 @@ class MyShip {
     }
 
     if (!screenShake.enabled) {
-      stroke(0, 100 * (1 - this.energy / maxEnergy), 100)
+      stroke(0, 100 * (1 - this.energy / this.maxEnergy), 100)
     }
-    */
 
     fill(0)
     rotate(this.angle)
@@ -550,7 +492,6 @@ const lobbyView = {
 
   update() {
     syncConnection()
-    syncGame()
     if (joined) {
       segueTo(gameView)
     }
@@ -566,7 +507,7 @@ const lobbyView = {
   },
 
   keyPressed() {
-    if (keyCode == 13 /* enter */) sendMessage('join')
+    if (keyCode == 13 /* enter */) sendMessage(`join,${nick}`)
   },
 
   drawUI() {
@@ -605,9 +546,12 @@ const lobbyView = {
 }
 
 const gameView = {
+  onExit() {
+    gameOver = false
+  },
+
   update() {
     syncConnection()
-    syncWorld()
     syncPlayer()
 
     updateViewport()
@@ -619,12 +563,12 @@ const gameView = {
     }
 
     if (gameOver) {
+      joined = false
       lobbyView.banner = 'game over'
       segueTo(lobbyView)
     }
 
     pelletAngle += dt * pelletAngleSpeed
-    //console.log('')
     myShip.update()
     for (const id in pellets) pellets[id].update()
     for (const id in bullets) bullets[id].update()
@@ -639,11 +583,11 @@ const gameView = {
   draw() {
     rect(0, 0, mapSize, mapSize)
     drawStars()
-    myShip.draw()
     for (const id in bullets) bullets[id].draw()
     for (const id in rocks) rocks[id].draw()
     for (const id in pellets) pellets[id].draw()
     for (const id in ships) ships[id].draw()
+    myShip.draw()
   },
 
   drawUI() {
@@ -662,11 +606,10 @@ const gameView = {
   },
 
   myStatus() {
-    return `
-      SPICE  ${myShip.spice}
-      ENERGY ${myShip.energy}
-      SHIELD ${myShip.shield ? 'ON' : 'OFF'}
-      COORDS ${round(myShip.x)} X ${round(myShip.y)}`
+    return `SPICE  ${myShip.spice}
+ENERGY ${myShip.energy}
+SHIELD ${myShip.shield ? 'ON' : 'OFF'}
+COORDS ${round(myShip.x)} X ${round(myShip.y)}`
   },
 }
 
