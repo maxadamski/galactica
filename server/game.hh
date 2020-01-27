@@ -74,9 +74,9 @@ struct Game {
     bool finished = false;
     bool reset = false;
     i32 rock_count = (int)map_size/10;
-    i32 until_stop = game_time;
+    i32 until_stop;
     i32 until_reset = 0;
-    i32 until_reset_max = reset_time;
+    i32 until_reset_max;
 
     uniform_int_distribution<> angle_dist{0, (i32)TAU*1000};
     uniform_int_distribution<> coord_dist{0, map_size*1000};
@@ -96,6 +96,11 @@ struct Game {
     Bullet &spawn_bullet(i32 pid, i32 x, i32 y, i32 angle);
     void spawn_pellets(Rock &rock);
     void spawn_pellets(Player &player);
+
+    inline Game(i32 game_time, i32 reset_time) {
+        until_stop = game_time;
+        until_reset_max = reset_time;
+    }
 
     inline i32 winner() {
         i32 bestScore = 0;

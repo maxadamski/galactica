@@ -14,7 +14,7 @@ bool handle_request(i32 sfd, string &req);
 
 i32 port = 6666;
 
-Game game;
+Game game(game_time, reset_time);
 
 const i32 SHIELD_SHIP_DECAY = 500;
 const i32 SHIELD_ROCK_DECAY = 2*1000;
@@ -26,7 +26,7 @@ map<i32, u64> last_ping;
 map<i32, i32> client_player;
 
 void resetGame() {
-    game = Game();
+    game = Game(game_time, reset_time);
     game.init();
     client_player.clear();
 }
@@ -390,7 +390,7 @@ bool handle_request(i32 fd, string &req) {
             printf("[warn] %d preparing for next game\n", fd);
             return true;
         }
-        if (contains(client_player, fd)) {
+        if (contains(client_player, fd) && !game.players.data[client_player[fd]].game_over) {
             printf("[warn] %d already joined\n", fd);
             return true;
         }
@@ -487,10 +487,10 @@ void parse_args(int argc, char **argv) {
             game_time = atoi(argv[++i]);
 
         } else if (strcmp(argv[i],"--reset-time")==0) {
-            reset_time = atoi(argv[i++]);
+            reset_time = atoi(argv[++i]);
 
         } else if (strcmp(argv[i],"--map-size")==0) {
-            map_size = atoi(argv[i++]);
+            map_size = atoi(argv[++i]);
         }
     }
 }
@@ -525,12 +525,7 @@ int main(int argc, char **argv) {
 
     epoll_event events[max_events];
 
-    game.init();
-
-    //thread thread1(thread_prune_clients);
-    //thread thread2(thread_step_game);
-    //thread thread3(thread_cast_game);
-
+    resetGame();
     auto t0 = now();
     while (true) {
         i32 event_count = nicepoll.wait(events, 1, 10);

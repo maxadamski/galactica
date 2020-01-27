@@ -5,3 +5,4 @@ yarn.lock
 node_modules/
 cmake-build-debug/
 .idea/
+server/main
