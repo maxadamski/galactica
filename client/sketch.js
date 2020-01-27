@@ -42,6 +42,7 @@ let connected = false
 let joined = false
 let gameOver = false
 let gameFinished = true
+let winningId = -1
 let lastPing = -1
 let myId = -1
 let myShip = {}
@@ -68,6 +69,7 @@ function resetGame() {
   myId = -1
   gameOver = false
   joined = false
+  winningId = -1
 }
 
 let messageBuffer = ''
@@ -129,7 +131,6 @@ function onMessage(text) {
       ship.spice = num(msg[5])
       ship.energy = num(msg[6])
       ship.shield = num(msg[7]) === 1
-      console.log('my ship')
 
     } else {
       if (!(id in ships)) ships[id] = new Ship(id)
@@ -170,8 +171,9 @@ function onMessage(text) {
     bullet.time = num(msg[6])
 
   } else if (msg[0] == 'stat-pellet') {
+    console.log(text)
     const id = num(msg[1])
-    if (!(id in bullets)) pellets[id] = new Pellet(id)
+    if (!(id in pellets)) pellets[id] = new Pellet(id)
     const pellet = pellets[id]
 
     pellet.x = dint(msg[2])
@@ -196,6 +198,7 @@ function onMessage(text) {
     if (id in bullets) delete bullets[id]
 
   } else if (msg[0] == 'del-pellet') {
+    console.log(text)
     const id = num(msg[1])
     if (id in pellets) delete pellets[id]
 
@@ -208,6 +211,13 @@ function onMessage(text) {
     if (id == myId) gameOver = true
     if (id in ships) delete ships[id]
 
+  } else if (msg[0] == 'game-over') {
+    const id = num(msg[1])
+    if (id == myId) {
+      gameOver = true
+      winningId = id
+    }
+
   } else {
     console.log(`unknown message ${text}`)
   }
@@ -216,7 +226,6 @@ function onMessage(text) {
 }
 
 function shootBullet () {
-  console.log('fire!')
   sendMessage(`usr-fired,${myId},${eint(myShip.x)},${eint(myShip.y)},${eint(myShip.angle)}`)
 }
 
@@ -225,7 +234,7 @@ let syncPlayer = timedLambda(20, () => {
   sendMessage(`usr-coord,${myId},${eint(myShip.x)},${eint(myShip.y)},${eint(myShip.angle)}`)
 })
 
-let syncConnection = timedLambda(1000, () => {
+let syncConnection = timedLambda(800, () => {
   sendMessage('ping')
   if (millis() - lastPing > 5*1000) {
     connected = false
@@ -461,7 +470,8 @@ const loginView = {
     host = addr[0]
     port = Number(addr[1])
     nick = nickInput.value()
-    socket = dgram.createSocket('udp4')
+
+    if (!!socket.close) socket.close()
 
     socket = new Net.Socket()
 
@@ -594,7 +604,11 @@ const gameView = {
 
     if (gameOver) {
       joined = false
-      lobbyView.banner = 'game over'
+      if (winningId == myId) {
+        lobbyView.banner = 'you won!'
+      } else {
+        lobbyView.banner = 'game over'
+      }
       segueTo(lobbyView)
     }
 

@@ -225,8 +225,8 @@ struct Table {
         //free_id.push(id);
     }
 
-    inline void remove(unordered_set<i32> id) {
-        for (i32 i : id) remove(i);
+    inline void remove(const unordered_set<i32> &id) {
+        for (i32 i : id) data.erase(i);
     }
 
     inline bool contains(i32 id) {
@@ -310,11 +310,7 @@ inline i32 make_nonblocking(i32 fd) {
 map<i32, string> inbox;
 
 inline void xsend(i32 fd, string x) {
-    if (x == "") {
-        printf("xsend empty\n");
-    }
     x += "\n";
-    printf("xsend %s", x.c_str());
     const char *buffer = x.c_str();
     u32 length = x.size();
     u32 written = 0;
@@ -322,18 +318,13 @@ inline void xsend(i32 fd, string x) {
         written += write(fd, buffer + written, length - written);
 }
 
-inline void xclear(i32 fd) {
-    inbox.erase(fd);
-}
-
 inline vector<string> xrecv(i32 fd) {
     const i32 max_length = 1024;
-    static u8 buffer[max_length];
+    u8 buffer[max_length];
     vector<string> reqs;
 
     i32 length = read(fd, buffer, max_length);
     if (length <= 0) {
-        printf("could not read message from fd %d\n", fd);
         return reqs;
     }
     
@@ -341,7 +332,6 @@ inline vector<string> xrecv(i32 fd) {
     if (inbox.find(fd) != inbox.end()) {
         chunk = inbox[fd] + chunk;
     }
-    printf("xrecv %s", chunk.c_str());
 
     vector<string> msgs = split(chunk, "\n");
     inbox[fd] = msgs.back();
@@ -349,3 +339,6 @@ inline vector<string> xrecv(i32 fd) {
     return msgs;
 }
 
+inline void xclear(i32 fd) {
+    inbox.erase(fd);
+}

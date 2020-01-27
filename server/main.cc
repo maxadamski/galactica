@@ -16,7 +16,7 @@ i32 port = 6666;
 
 Game game;
 
-const i32 SHIELD_SHIP_DECAY = 0.5*1000;
+const i32 SHIELD_SHIP_DECAY = 500;
 const i32 SHIELD_ROCK_DECAY = 2*1000;
 const i32 SHIELD_INIT_DECAY = 5*1000;
 
@@ -24,8 +24,12 @@ NicePoll nicepoll;
 unordered_set<i32> clients;
 map<i32, u64> last_ping;
 map<i32, i32> client_player;
-map<i32, i32> player_client;
-map<i32, thread> world_updates;
+
+void resetGame() {
+    game = Game();
+    game.init();
+    client_player.clear();
+}
 
 
 // ----------------------------------------------------------------------------
@@ -33,8 +37,11 @@ map<i32, thread> world_updates;
 // ----------------------------------------------------------------------------
 
 string encode_pellets(vector<Pellet> &objs) {
-    string msg = "";
-    for (Pellet &obj : objs) msg += ";stat-pellet,"+obj.encode();
+    string msg;
+    for (Pellet &obj : objs) {
+        if (!msg.empty()) msg += ";";
+        msg += "stat-pellet,"+obj.encode();
+    }
     return msg;
 }
 
@@ -94,7 +101,7 @@ void send_all_particles(i32 fd, Game &game) {
     xsend(fd, res);
 }
 
-void send_world_updates(i32 fd, Player &player, Game &game) {
+void send_world_updates(i32 fd, Game &game) {
     //xsend(fd, "stat-ship,"+player.encode());
     string res;
     for (auto const& [id, obj] : game.players.data) {
@@ -135,6 +142,7 @@ void Game::init() {
 
 void Game::terminate_player(Player &player) {
     xcast("del-ship,"+S(player.id));
+    printf("terminate player %d\n", player.id);
     player.game_over = true;
     spawn_pellets(player);
 }
@@ -148,7 +156,7 @@ void Game::did_hit_rock(Player &player) {
     }
 }
 
-void Game::did_hit_bullet(Player &player, const Bullet &obj) {
+void Game::did_hit_bullet(Player &player, Bullet &obj) {
     player.energy -= 1;
     if (player.energy <= 0) {
         terminate_player(player);
@@ -157,13 +165,13 @@ void Game::did_hit_bullet(Player &player, const Bullet &obj) {
     }
 }
 
-void Game::did_hit_pellet(Player &player, const Pellet &obj) {
-    xcast("del-pellet,"+S(obj.id));
+void Game::did_hit_pellet(Player &player, Pellet &obj) {
     if (obj.type == 1)
         player.energy += obj.value;
     else
         player.spice += obj.value;
 }
+
 
 void Game::step(float dt) {
     if (reset) {
@@ -177,7 +185,9 @@ void Game::step(float dt) {
     } else {
         until_stop -= dt;
         if (until_stop < 0) {
-            printf("[info] end of round\n");
+            i32 winner_id = winner();
+            xcast("game-over,"+S(winner_id));
+            if (winner_id != -1) xcast("log-win,"+players.data[winner_id].nick);
             finished = true;
             until_reset = until_reset_max;
             return;
@@ -187,10 +197,12 @@ void Game::step(float dt) {
     unordered_set<i32> del_rocks, del_bullets, del_pellets;
 
     for (auto& [id, player] : players.data) {
-        if (player.game_over) continue;
+        if (player.game_over) {
+            continue;
+        }
         player.update(dt);
 
-        for (auto const& [obj_id, obj] : pellets.data) {
+        for (auto& [obj_id, obj] : pellets.data) {
             if (dist(player.x, player.y, obj.x, obj.y) < 8*1000) {
                 did_hit_pellet(player, obj);
                 del_pellets.insert(obj_id);
@@ -212,7 +224,7 @@ void Game::step(float dt) {
 
         bool oob = rock.x < 0 || rock.y < 0 || rock.x > map_size*1000 || rock.y > map_size*1000;
         if (oob) {
-            //del_rocks.insert(rock_id);
+            del_rocks.insert(rock_id);
         }
     }
 
@@ -224,7 +236,6 @@ void Game::step(float dt) {
             del_bullets.insert(bullet_id);
         }
 
-        /*
         // check if bullet collides with any player
         for (auto &[player_id, player] : players.data) {
             if (player.game_over || player.shield || player_id == bullet.pid) continue;
@@ -232,28 +243,25 @@ void Game::step(float dt) {
             if (dist(player.x, player.y, bullet.x, bullet.y) < 6*1000) {
                 did_hit_bullet(player, bullet);
                 del_bullets.insert(bullet_id);
-                goto after_checks;
             }
         }
-        */
 
         // check if bullet collides with any rock
         for (auto &[rock_id, rock] : rocks.data) {
-            if (rock.disable) continue;
             if (dist(rock.x, rock.y, bullet.x, bullet.y) < rock.size * 1000 / 2) {
+                del_bullets.insert(bullet_id);
                 rock.health -= 1;
                 if (rock.health <= 0) {
-                    rock.disable = true;
                     del_rocks.insert(rock_id);
                     spawn_pellets(rock);
                 }
-                del_bullets.insert(bullet_id);
             }
         }
     }
 
 
     for (i32 id : del_rocks) cast_del_rock(id);
+    for (i32 id : del_pellets) cast_del_pellet(id);
     for (i32 id : del_bullets) cast_del_bullet(id);
     bullets.remove(del_bullets);
     pellets.remove(del_pellets);
@@ -297,10 +305,10 @@ void Game::spawn_pellets(Rock &rock) {
     for (i32 i = 0; i < spiceCount; i++) {
         i32 x = random_normal(rock.x, 10*1000);
         i32 y = random_normal(rock.y, 10*1000);
-        Pellet pellet{-1, x, y, 1, 0};
-        i32 id = pellets.append(pellet);
-        pellets.data[id].id = id;
-        newPellets.push_back(pellets.data[id]);
+        i32 id = pellets.append(Pellet{-1, x, y, 1, 0});
+        Pellet &pellet = pellets.data[id];
+        pellet.id = id;
+        newPellets.push_back(pellet);
     }
 
     cast_pellets(newPellets);
@@ -336,7 +344,7 @@ void Game::spawn_pellets(Player &player) {
 
 
 // ----------------------------------------------------------------------------
-// -- Threads and events
+// -- Events
 // ----------------------------------------------------------------------------
 
 #define contains(x, y) (x.find(y) != x.end())
@@ -346,76 +354,22 @@ void remove_client(i32 fd) {
     nicepoll.erase(fd);
     clients.erase(fd);
     last_ping.erase(fd);
-    if (contains(world_updates, fd)) {
-        world_updates[fd].join();
-        world_updates.erase(fd);
-    }
     if (contains(client_player, fd)) {
         Player &player = game.players.data[client_player[fd]];
         xcast("log-left,"+player.nick);
         game.terminate_player(player);
         client_player.erase(fd);
     }
-    if (contains(player_client, fd)) player_client.erase(fd);
 }
 
 void prune_clients() {
     vector<i32> to_remove;
     for (auto const& [fd, time] : last_ping) {
-        if (millis() - time > 5*1000)
+        if (millis() - time > 10*1000)
             to_remove.push_back(fd);
     }
     for (i32 fd : to_remove) {
         remove_client(fd);
-    }
-}
-
-void thread_cast_game() {
-    while (true) {
-        cast_game_updates(game);
-        this_thread::sleep_for(chrono::milliseconds(50));
-    }
-}
-
-void thread_step_game() {
-    auto t1 = now();
-    while (true) {
-        if (game.reset) {
-            game = Game();
-            game.init();
-        }
-
-        game.step(millis(now() - t1));
-        t1 = now();
-        this_thread::sleep_for(chrono::milliseconds(16));
-    }
-}
-
-void thread_send_world_high(i32 fd) {
-    i32 my_id = client_player[fd];
-    Player &player = game.players.data[my_id];
-    auto last = millis();
-    while (contains(clients, fd)) {
-        send_world_updates(fd, player, game);
-        if (millis() - last > 1000) {
-            send_all_particles(fd, game);
-            last = millis();
-        }
-        this_thread::sleep_for(chrono::milliseconds(30));
-    }
-}
-
-void thread_send_world_low(i32 fd) {
-    while (true) {
-        send_all_particles(fd, game);
-        this_thread::sleep_for(chrono::milliseconds(500));
-    }
-}
-
-void thread_prune_clients() {
-    while (true) {
-        prune_clients();
-        this_thread::sleep_for(chrono::milliseconds(500));
     }
 }
 
@@ -424,11 +378,14 @@ bool handle_request(i32 fd, string &req) {
         xsend(fd, "pong");
 
     } else if (req.compare(0, 4, "conn") == 0) {
-        if (client_player.find(fd) != client_player.end()) return true;
-        printf("[info] connect %d\n", fd);
-        world_updates[fd] = thread(thread_send_world_high, fd);
+        //if (client_player.find(fd) != client_player.end()) return true;
+        //printf("[info] connect %d\n", fd);
 
     } else if (req.compare(0, 4, "join") == 0) {
+        if (contains(client_player, fd)) {
+            printf("[warn] %d already joined\n", fd);
+            return true;
+        }
         if (game.finished) return true;
         auto arg = split(2, req, ",");
         auto nick = arg[1];
@@ -436,7 +393,6 @@ bool handle_request(i32 fd, string &req) {
         Player &player = game.spawn_player();
         player.nick = nick;
         client_player[fd] = player.id;
-        player_client[player.id] = fd;
         send_all_particles(fd, game);
         xcast("log-join,"+nick);
         xsend(fd, "join,"+player.encode()+","+game.encode());
@@ -564,16 +520,24 @@ int main(int argc, char **argv) {
     game.init();
 
     //thread thread1(thread_prune_clients);
-    thread thread2(thread_step_game);
+    //thread thread2(thread_step_game);
     //thread thread3(thread_cast_game);
 
+    auto t0 = now();
     while (true) {
-        prune_clients();
-        cast_game_updates(game);
-        i32 event_count = nicepoll.wait(events, 2, -1);
+        i32 event_count = nicepoll.wait(events, 1, 10);
         for (i32 i = 0; i < event_count; i++) {
             nicepoll.handle(events[i]);
         }
+        prune_clients();
+        if (game.reset) {
+            resetGame();
+        }
+        game.step(millis(now() - t0));
+        t0 = now();
+        cast_game_updates(game);
+
+        for (i32 fd : clients) send_world_updates(fd, game);
     }
 }
 
