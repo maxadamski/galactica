@@ -41,7 +41,6 @@ let maxTx = 0, maxTy = 0
 let connected = false
 let joined = false
 let gameOver = false
-let gameFinished = true
 let winningId = -1
 let lastPing = -1
 let myId = -1
@@ -122,7 +121,7 @@ function onMessage(text) {
     mapSize = num(msg[1])
     untilReset = Math.max(num(msg[2]), 0)
     untilStop = Math.max(num(msg[3]), 0)
-    gameFinished = num(msg[4]) === 1
+    gameOver = num(msg[4]) === 1
 
   } else if (msg[0] == 'stat-ship') {
     const id = num(msg[1])
@@ -555,15 +554,6 @@ const lobbyView = {
     drawText('captain\'s log', windowWidth - 20, 35, myFont, 24, RIGHT)
     //drawText(this.leaderboardText(), windowWidth - 20, 57, 'monospace', 18, RIGHT)
     drawText(logs.join('\n'), windowWidth -20, 57, 'monospace', 18, RIGHT)
-
-    /*
-    if (gameOver) {
-      textSize(62)
-      text('game over', windowWidth / 2, windowHeight / 2 - 10)
-      textSize(24)
-      text('press enter to respawn', windowWidth / 2, windowHeight / 2 + 30)
-    }
-    */
   },
 
   statusMessage() {
@@ -602,6 +592,11 @@ const gameView = {
     for (const id in rocks) rocks[id].update()
     for (const id in ships) ships[id].update()
 
+    if (!connected) {
+      loginView.message = 'disconnected from server'
+      segueTo(loginView)
+    }
+
     if (gameOver) {
       joined = false
       if (winningId == myId) {
@@ -609,12 +604,8 @@ const gameView = {
       } else {
         lobbyView.banner = 'game over'
       }
+      console.log('game over, segue to lobby')
       segueTo(lobbyView)
-    }
-
-    if (!connected) {
-      loginView.message = 'disconnected from server'
-      segueTo(loginView)
     }
   },
 

@@ -382,11 +382,14 @@ bool handle_request(i32 fd, string &req) {
         //printf("[info] connect %d\n", fd);
 
     } else if (req.compare(0, 4, "join") == 0) {
+        if (game.finished) {
+            printf("[warn] %d preparing for next game\n", fd);
+            return true;
+        }
         if (contains(client_player, fd)) {
             printf("[warn] %d already joined\n", fd);
             return true;
         }
-        if (game.finished) return true;
         auto arg = split(2, req, ",");
         auto nick = arg[1];
         printf("[info] join %s %d\n", nick.c_str(), fd);
