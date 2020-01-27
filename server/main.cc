@@ -142,12 +142,15 @@ void Game::init() {
 
 void Game::terminate_player(Player &player) {
     xcast("del-ship,"+S(player.id));
+    xcast("log-dead,"+player.nick);
+
     printf("terminate player %d\n", player.id);
     player.game_over = true;
     spawn_pellets(player);
 }
 
 void Game::did_hit_rock(Player &player) {
+    if (player.fd > 0) xsend(player.fd, "got-hit");
     player.energy -= 1;
     if (player.energy <= 0) {
         terminate_player(player);
@@ -157,6 +160,7 @@ void Game::did_hit_rock(Player &player) {
 }
 
 void Game::did_hit_bullet(Player &player, Bullet &obj) {
+    if (player.fd > 0) xsend(player.fd, "got-hit");
     player.energy -= 1;
     if (player.energy <= 0) {
         terminate_player(player);
@@ -395,6 +399,7 @@ bool handle_request(i32 fd, string &req) {
         printf("[info] join %s %d\n", nick.c_str(), fd);
         Player &player = game.spawn_player();
         player.nick = nick;
+        player.fd = fd;
         client_player[fd] = player.id;
         send_all_particles(fd, game);
         xcast("log-join,"+nick);

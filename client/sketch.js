@@ -110,10 +110,11 @@ function onMessage(text) {
     myShip.spice = num(msg[5])
     myShip.energy = num(msg[6])
     myShip.shield = num(msg[7]) === 1
+    if (num(msg[8]) === 1) gameOver = true
 
-    mapSize = num(msg[8])
-    untilReset = num(msg[9])
-    untilStop = num(msg[10])
+    mapSize = num(msg[9])
+    untilReset = num(msg[10])
+    untilStop = num(msg[11])
 
     joined = true
 
@@ -130,6 +131,7 @@ function onMessage(text) {
       ship.spice = num(msg[5])
       ship.energy = num(msg[6])
       ship.shield = num(msg[7]) === 1
+      if (num(msg[8]) === 1) gameOver = true
 
     } else {
       if (!(id in ships)) ships[id] = new Ship(id)
@@ -187,7 +189,7 @@ function onMessage(text) {
     addLog(`${msg[1]} left the arena`)
 
   } else if (msg[0] == 'log-dead') {
-    addLog(`${msg[1]} won destroyed`)
+    addLog(`${msg[1]} was destroyed`)
 
   } else if (msg[0] == 'log-win') {
     addLog(`${msg[1]} won the game`)
@@ -208,7 +210,7 @@ function onMessage(text) {
   } else if (msg[0] == 'del-ship') {
     const id = num(msg[1])
     if (id == myId) gameOver = true
-    if (id in ships) delete ships[id]
+    if (id in ships) ships[id].visible = false
 
   } else if (msg[0] == 'game-over') {
     const id = num(msg[1])
@@ -341,6 +343,7 @@ class Rock {
 
 class Ship {
   constructor(id) {
+    this.visible = true
     this.id = id
   }
 
@@ -348,6 +351,7 @@ class Ship {
   }
 
   draw() {
+    if (!this.visible) return
     if (outsideView(this)) return
     push()
     translate(this.x, this.y)
@@ -449,11 +453,12 @@ const loginView = {
   onExit() {
     this.connecting = false;
     this.connTime = 0;
-    this.message = '';
+    this.message = ''
     connectButton.hide()
     addrInput.hide()
     nickInput.hide()
     logs = []
+    lobbyView.banner = ''
   },
 
   keyPressed() {

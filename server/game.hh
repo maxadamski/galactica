@@ -7,7 +7,7 @@ const i32 bullet_decay = 1000*1;
 const i32 max_energy = 3;
 const i32 init_angle = -PI/2*1000;
 
-i32 game_time = 1*60 * 1000;
+i32 game_time = 5*60 * 1000;
 i32 reset_time = 30 * 1000;
 i32 map_size = 4 * 1000;
 
@@ -15,12 +15,13 @@ struct Player {
     i32 id, x, y, angle, spice, energy, shield, shield_time, shield_decay;
     string nick = "someone";
     bool game_over = false;
+    i32 fd = -1;
 
     void enable_shield(i32 decay);
     void update_shield(i32 dt);
 
     inline string encode() const {
-        return S(id)+","+S(x)+","+S(y)+","+S(angle)+","+S(spice)+","+S(energy)+","+S(shield);
+        return S(id)+","+S(x)+","+S(y)+","+S(angle)+","+S(spice)+","+S(energy)+","+S(shield)+","+S(game_over);
     }
 
     inline void update(i32 dt) {
