@@ -1,10 +1,5 @@
 #pragma once
 
-#include <cstdio>
-#include <cstdint>
-#include <cstring>
-#include <cmath>
-
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -21,6 +16,21 @@
 #include <chrono>
 #include <iterator>
 
+#include <math.h> 
+#include <stdio.h> 
+#include <stdlib.h> 
+#include <string.h> 
+#include <unistd.h> 
+#include <fcntl.h>
+#include <sys/types.h> 
+#include <sys/socket.h> 
+#include <sys/epoll.h> 
+#include <sys/ioctl.h> 
+#include <arpa/inet.h> 
+#include <netinet/in.h> 
+
+#include <string>
+#include <map>
 
 //
 // Shorthands
@@ -132,7 +142,6 @@ inline i32 random_uniform(i32 lower, i32 upper) {
     return dist(gen);
 }
 
-
 //
 // Time
 //
@@ -141,8 +150,12 @@ inline auto now() {
     return chrono::high_resolution_clock::now();
 }
 
+inline u64 millis() {
+    return now().time_since_epoch().count() / 1e6;
+}
+
 template <class T>
-inline i32 millis(T delta) {
+inline u64 millis(T delta) {
     return chrono::duration_cast<chrono::milliseconds>(delta).count();
 }
 
@@ -154,15 +167,28 @@ inline i32 millis(T delta) {
 #define S(x) to_string(x)
 #define I(x) (((x[0] >= '0' && x[0] <= '9') || x[0] == '-') ? stoi(x) : (throw "bad request"))
 
-template <size_t N>
-bool split(string (&arr)[N], string str) {
-    char *token = strtok((char*)str.c_str(), " ,\n");
-    for (int i = 0; token != NULL; i++) {
-        arr[i] = string(token);
-        if (arr[i] == "") return false;
-        token = strtok(NULL, " ,\n");
+inline vector<string> split(string str, string token) {
+    vector<string>result;
+    while(str.size()) {
+        u64 index = str.find(token);
+        if (index != string::npos) {
+            result.push_back(str.substr(0, index));
+            str = str.substr(index + token.size());
+            if (str.size() == 0) result.push_back(str);
+        } else {
+            result.push_back(str);
+            str = "";
+        }
     }
-    return true;
+    return result;
+}
+
+inline vector<string> split(i32 n, string str, string token) {
+    auto res = split(str, token);
+    for (i32 i = 0; i < n; i++) {
+        if (res[i] == "") throw;
+    }
+    return res;
 }
 
 
@@ -199,7 +225,7 @@ struct Table {
         //free_id.push(id);
     }
 
-    inline void remove(vector<i32> id) {
+    inline void remove(unordered_set<i32> id) {
         for (i32 i : id) remove(i);
     }
 
@@ -213,6 +239,113 @@ struct Table {
 // File
 //
 
-bool readFile(const string &path, string &data);
-bool fileExists(const string &path);
+inline bool readFile(const string &path, string &data) {
+    ifstream file(path, ios::in);
+    if (!file.is_open()) {
+        fprintf(stderr, "error: couldn't open file '%s'\n", path.c_str());
+        return false;
+    }
+    stringstream stream;
+    stream << file.rdbuf();
+    file.close();
+    data = stream.str();
+    return true;
+}
+
+inline bool fileExists(const string &name) {
+    ifstream f(name.c_str());
+    return f.good();
+}
+
+//
+// Networking
+//
+
+struct NicePoll {
+    map<i32, void (*)(i32, u32)> handlers;
+    u64 max_events = 64;
+    i32 epoll_fd;
+
+    inline i32 create() {
+        epoll_fd = epoll_create1(0);
+        return epoll_fd;
+    }
+
+    inline void insert(i32 fd, u32 events, void (*callback)(i32, u32)) {
+        epoll_event event;
+        event.events = events;
+        event.data.fd = fd;
+        handlers[fd] = callback;
+        epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &event);
+    }
+
+    inline void erase(i32 fd) {
+        epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, nullptr);
+        handlers.erase(fd);
+        shutdown(fd, SHUT_RDWR);
+        close(fd);
+    }
+
+    inline void handle(epoll_event event) {
+        i32 fd = event.data.fd;
+        handlers[fd](fd, event.events);
+    }
+
+    inline i32 wait(epoll_event *events, i32 count, i32 timeout = -1) {
+        return epoll_wait(epoll_fd, events, count, timeout);
+    }
+};
+
+inline i32 make_reusable(i32 fd) {
+    const i32 one = 1;
+    return setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+}
+
+inline i32 make_nonblocking(i32 fd) {
+    const i32 one = 1;
+    return ioctl(fd, FIONBIO, &one);
+}
+
+
+map<i32, string> inbox;
+
+inline void xsend(i32 fd, string x) {
+    if (x == "") {
+        printf("xsend empty\n");
+    }
+    x += "\n";
+    printf("xsend %s", x.c_str());
+    const char *buffer = x.c_str();
+    u32 length = x.size();
+    u32 written = 0;
+    while (written < length)
+        written += write(fd, buffer + written, length - written);
+}
+
+inline void xclear(i32 fd) {
+    inbox.erase(fd);
+}
+
+inline vector<string> xrecv(i32 fd) {
+    const i32 max_length = 1024;
+    static u8 buffer[max_length];
+    vector<string> reqs;
+
+    i32 length = read(fd, buffer, max_length);
+    if (length <= 0) {
+        printf("could not read message from fd %d\n", fd);
+        return reqs;
+    }
+    
+    string chunk(buffer, buffer + length);
+    if (inbox.find(fd) != inbox.end()) {
+        chunk = inbox[fd] + chunk;
+    }
+    printf("xrecv %s", chunk.c_str());
+
+    vector<string> msgs = split(chunk, "\n");
+    inbox[fd] = msgs.back();
+    msgs.pop_back();
+    return msgs;
+}
 

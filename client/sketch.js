@@ -90,9 +90,10 @@ function onMessage(text) {
   if (text == '') return
 
   const msg = text.split(',')
+  const oldMapSize = mapSize
 
+  lastPing = millis()
   if (msg[0] == 'pong') {
-    lastPing = millis()
 
   } else if (msg[0] == 'got-hit') {
     screenShake.toggle()
@@ -105,14 +106,13 @@ function onMessage(text) {
     myShip.x = dint(msg[2])
     myShip.y = dint(msg[3])
     myShip.angle = dint(msg[4])
+    myShip.spice = num(msg[5])
+    myShip.energy = num(msg[6])
+    myShip.shield = num(msg[7]) === 1
 
-    let oldMapSize = mapSize
     mapSize = num(msg[8])
     untilReset = num(msg[9])
     untilStop = num(msg[10])
-    addLog(`ship ${id} joined the game`)
-
-    if (mapSize != oldMapSize) windowResized()
 
     joined = true
 
@@ -129,6 +129,7 @@ function onMessage(text) {
       ship.spice = num(msg[5])
       ship.energy = num(msg[6])
       ship.shield = num(msg[7]) === 1
+      console.log('my ship')
 
     } else {
       if (!(id in ships)) ships[id] = new Ship(id)
@@ -178,34 +179,44 @@ function onMessage(text) {
     pellet.value = num(msg[4])
     pellet.type = num(msg[5])
 
+  } else if (msg[0] == 'log-join') {
+    addLog(`${msg[1]} joined the arena`)
+
+  } else if (msg[0] == 'log-left') {
+    addLog(`${msg[1]} left the arena`)
+
+  } else if (msg[0] == 'log-dead') {
+    addLog(`${msg[1]} won destroyed`)
+
+  } else if (msg[0] == 'log-win') {
+    addLog(`${msg[1]} won the game`)
+
   } else if (msg[0] == 'del-bullet') {
     const id = num(msg[1])
-    console.log(text);
     if (id in bullets) delete bullets[id]
 
   } else if (msg[0] == 'del-pellet') {
     const id = num(msg[1])
-    console.log(text);
     if (id in pellets) delete pellets[id]
 
   } else if (msg[0] == 'del-rock') {
     const id = num(msg[1])
-    console.log(text);
     if (id in rocks) delete rocks[id]
 
   } else if (msg[0] == 'del-ship') {
     const id = num(msg[1])
-    console.log(`del-ship ${id}`)
     if (id == myId) gameOver = true
     if (id in ships) delete ships[id]
-    addLog(`ship ${id} met it's end`)
 
   } else {
-    addLog(`unknown message ${text}`)
+    console.log(`unknown message ${text}`)
   }
+
+  if (mapSize != oldMapSize) windowResized()
 }
 
 function shootBullet () {
+  console.log('fire!')
   sendMessage(`usr-fired,${myId},${eint(myShip.x)},${eint(myShip.y)},${eint(myShip.angle)}`)
 }
 
@@ -216,6 +227,10 @@ let syncPlayer = timedLambda(20, () => {
 
 let syncConnection = timedLambda(1000, () => {
   sendMessage('ping')
+  if (millis() - lastPing > 5*1000) {
+    connected = false
+    joined = false
+  }
 })
 
 // ----------------------------------------------------------------------------
@@ -420,6 +435,7 @@ const loginView = {
     connectButton.show()
     addrInput.show()
     nickInput.show()
+    logs = []
   },
 
   onExit() {
@@ -429,6 +445,7 @@ const loginView = {
     connectButton.hide()
     addrInput.hide()
     nickInput.hide()
+    logs = []
   },
 
   keyPressed() {
@@ -449,6 +466,7 @@ const loginView = {
     socket = new Net.Socket()
 
     socket.connect({host: host, port: port}, () => {
+      sendMessage("conn")
       connected = true
     })
 
@@ -460,11 +478,6 @@ const loginView = {
     socket.on('end', () => {
       connected = false
     })
-
-    //socket.on('message', (buffer, remote) => {
-    //  if (remote.address == host && remote.port == port)
-    //    onMessage(buffer.toString('utf8'))
-    //})
   },
 
   onTimeout() {
@@ -517,16 +530,21 @@ const lobbyView = {
   },
 
   keyPressed() {
-    if (keyCode == 13 /* enter */) sendMessage(`join,${nick}`)
+    if (keyCode == 13 /* enter */) {
+      sendMessage(`conn`)
+      sendMessage(`join,${nick}`)
+    }
   },
 
   drawUI() {
     drawTimer()
     drawText(this.banner, windowWidth/2, windowHeight/2, myFont, 80, CENTER)
     drawText('lobby', 20, 35, myFont, 24, LEFT)
-    drawText('leaderboard', windowWidth - 20, 35, myFont, 24, RIGHT)
     drawText(this.statusMessage(), 20, 60, 'monospace', 18, LEFT)
-    drawText(this.leaderboardText(), windowWidth - 20, 57, 'monospace', 18, RIGHT)
+
+    drawText('captain\'s log', windowWidth - 20, 35, myFont, 24, RIGHT)
+    //drawText(this.leaderboardText(), windowWidth - 20, 57, 'monospace', 18, RIGHT)
+    drawText(logs.join('\n'), windowWidth -20, 57, 'monospace', 18, RIGHT)
 
     /*
     if (gameOver) {
@@ -633,6 +651,7 @@ function preload() {
 }
 
 function windowResized() {
+  console.log('window resized')
   resizeCanvas(windowWidth, windowHeight)
 
   nickInput.position(windowWidth/2 - 170, windowHeight/2 - 50)
