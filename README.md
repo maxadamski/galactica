@@ -1,6 +1,6 @@
 # GALACTICA 🛸
 
-A multiplayer interstellar action for the whole family!
+An interstellar multiplayer action game for the whole family!
 
 ## How to play
 
